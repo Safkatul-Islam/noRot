@@ -1,117 +1,136 @@
-import type { ActivityEntry, AppCategory, ProcrastinationScore, Severity } from './types'
-import {
-  APP_RULES,
-  DISTRACTION_CATEGORIES,
-  LATE_NIGHT_END,
-  LATE_NIGHT_MULTIPLIER,
-  LATE_NIGHT_START,
-  SCORE_WEIGHTS,
-  SEVERITY_BANDS,
-  SNOOZE_ESCALATION
-} from './constants'
+import { LATE_NIGHT_MULTIPLIER, SCORING_WEIGHTS, SEVERITY_BANDS } from './constants'
+import type { ActiveCategory, Severity, UsageSnapshot } from './types'
 
-export function classifyApp(appName: string, title: string = ''): { category: AppCategory; label: string } {
-  const searchStr = `${appName} ${title}`.toLowerCase()
-
-  for (const rule of APP_RULES) {
-    if (searchStr.includes(rule.pattern.toLowerCase())) {
-      return { category: rule.category, label: rule.label || appName }
-    }
-  }
-
-  return { category: 'unknown', label: appName }
+export interface CalculatedScore {
+  procrastinationScore: number
+  severity: Severity
 }
 
-export function isDistraction(category: AppCategory): boolean {
-  return DISTRACTION_CATEGORIES.has(category)
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  return Math.max(min, Math.min(max, value))
 }
 
-export function computeScore(
-  activities: ActivityEntry[],
-  snoozeCount: number = 0
-): ProcrastinationScore {
-  if (activities.length === 0) {
-    return {
-      score: 0,
-      severity: 'chill',
-      distractionRatio: 0,
-      switchRate: 0,
-      snoozePressure: 0,
-      topDistraction: null,
-      minutesMonitored: 0
-    }
-  }
-
-  const totalDuration = activities.reduce((sum, a) => sum + a.duration, 0)
-  const minutesMonitored = totalDuration / 60
-
-  // 1. Distraction ratio (0-100)
-  const distractionDuration = activities
-    .filter(a => isDistraction(a.category))
-    .reduce((sum, a) => sum + a.duration, 0)
-  const distractionRatio = totalDuration > 0 ? (distractionDuration / totalDuration) * 100 : 0
-
-  // 2. Switch rate (normalized 0-100)
-  // Count app switches (consecutive different apps)
-  let switches = 0
-  for (let i = 1; i < activities.length; i++) {
-    if (activities[i].app !== activities[i - 1].app) {
-      switches++
-    }
-  }
-  // Normalize: > 20 switches per 10 min = 100
-  const switchRate = Math.min((switches / Math.max(minutesMonitored, 1)) * 5, 100)
-
-  // 3. Snooze pressure (0-100)
-  const snoozeIndex = Math.min(snoozeCount, SNOOZE_ESCALATION.length - 1)
-  const snoozePressure = SNOOZE_ESCALATION[snoozeIndex] * 4 // scale to max 100
-
-  // Weighted score
-  let score =
-    distractionRatio * SCORE_WEIGHTS.distractionRatio +
-    switchRate * SCORE_WEIGHTS.switchRate +
-    snoozePressure * SCORE_WEIGHTS.snoozePressure
-
-  // Late night multiplier
-  const hour = new Date().getHours()
-  if (hour >= LATE_NIGHT_START || hour < LATE_NIGHT_END) {
-    score *= LATE_NIGHT_MULTIPLIER
-  }
-
-  score = Math.min(Math.round(score), 100)
-
-  // Find top distraction app
-  const distractionApps = new Map<string, number>()
-  for (const a of activities) {
-    if (isDistraction(a.category)) {
-      distractionApps.set(a.app, (distractionApps.get(a.app) || 0) + a.duration)
-    }
-  }
-  let topDistraction: string | null = null
-  let maxDuration = 0
-  for (const [app, dur] of distractionApps) {
-    if (dur > maxDuration) {
-      maxDuration = dur
-      topDistraction = app
-    }
-  }
-
-  return {
-    score,
-    severity: getSeverity(score),
-    distractionRatio: Math.round(distractionRatio),
-    switchRate: Math.round(switchRate),
-    snoozePressure: Math.round(snoozePressure),
-    topDistraction,
-    minutesMonitored: Math.round(minutesMonitored * 10) / 10
-  }
+function isDistractingCategory(category: ActiveCategory): boolean {
+  return category === 'social' || category === 'entertainment'
 }
 
-export function getSeverity(score: number): Severity {
-  for (const band of SEVERITY_BANDS) {
-    if (score <= band.max) {
-      return band.severity
-    }
-  }
-  return 'critical'
+function normalizeSwitchRate(switchesPerMin: number): number {
+  const s = Math.max(0, switchesPerMin)
+  if (s <= 4) return s / 10
+  if (s <= 10) return 0.4 + (s - 4) * (0.4 / 6)
+  return 0.8 + Math.min(s - 10, 5) * (0.2 / 5)
 }
+
+export function scoreToSeverity(score: number): Severity {
+  const s = clamp(Math.round(score), 0, 100)
+  const band = SEVERITY_BANDS.find(b => s >= b.min && s <= b.max)
+  return (band?.severity ?? 4) as Severity
+}
+
+function isLateNightHour(hour: number): boolean {
+  return hour >= 23 || hour < 5
+}
+
+function getLocalHour(snapshot: UsageSnapshot): number {
+  const fromSignal = snapshot.signals.timeOfDayLocal
+  if (Number.isFinite(fromSignal)) return clamp(Math.floor(fromSignal), 0, 23)
+  return new Date(snapshot.timestamp).getHours()
+}
+
+export function calculateScore(snapshot: UsageSnapshot, snoozePressure: number = 0): CalculatedScore {
+  const focusScore = snapshot.signals.focusScore
+  if (typeof focusScore === 'number' && Number.isFinite(focusScore)) {
+    const procrastinationScore = clamp(Math.round((100 - focusScore) + snoozePressure), 0, 100)
+    return { procrastinationScore, severity: scoreToSeverity(procrastinationScore) }
+  }
+
+  const isDistractingNow = isDistractingCategory(snapshot.categories.activeCategory)
+
+  const distractRatioRaw = typeof snapshot.signals.recentDistractRatio === 'number'
+    ? snapshot.signals.recentDistractRatio
+    : (snapshot.signals.sessionMinutes > 0
+        ? snapshot.signals.distractingMinutes / snapshot.signals.sessionMinutes
+        : 0)
+
+  const distractRatio = clamp(distractRatioRaw, 0, 1)
+  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio
+
+  const switchesPerMin = snapshot.signals.appSwitchesLast5Min / 5
+  const normSwitchRate = clamp(normalizeSwitchRate(switchesPerMin), 0, 1)
+  const normSwitchRateEffective = (isDistractingNow || effectiveDistractRatio >= 0.2) ? normSwitchRate : 0
+
+  const intentGap = snapshot.focusIntent !== null && isDistractingNow ? 1 : 0
+  const snoozePressureNorm = clamp(snapshot.signals.snoozesLast60Min, 0, 3) / 3
+
+  const base = 100 * (
+    SCORING_WEIGHTS.distractRatio * effectiveDistractRatio +
+    SCORING_WEIGHTS.switchRate * normSwitchRateEffective +
+    SCORING_WEIGHTS.intentGap * intentGap +
+    SCORING_WEIGHTS.snoozePressure * snoozePressureNorm
+  )
+
+  const mult = isLateNightHour(getLocalHour(snapshot)) ? LATE_NIGHT_MULTIPLIER : 1.0
+  const procrastinationScore = clamp(Math.round((base + snoozePressure) * mult), 0, 100)
+
+  return { procrastinationScore, severity: scoreToSeverity(procrastinationScore) }
+}
+
+export function applySnoozeEscalation(severity: Severity, snoozesLast60Min: number): Severity {
+  const bump = Math.floor(Math.max(0, snoozesLast60Min) / 2)
+  return clamp(severity + bump, 0, 4) as Severity
+}
+
+export function generateReasons(snapshot: UsageSnapshot, score: number): string[] {
+  const reasons: string[] = []
+
+  const isDistractingNow = isDistractingCategory(snapshot.categories.activeCategory)
+
+  const distractRatioRaw = typeof snapshot.signals.recentDistractRatio === 'number'
+    ? snapshot.signals.recentDistractRatio
+    : (snapshot.signals.sessionMinutes > 0
+        ? snapshot.signals.distractingMinutes / snapshot.signals.sessionMinutes
+        : 0)
+
+  const distractRatio = clamp(distractRatioRaw, 0, 1)
+  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio
+
+  if (effectiveDistractRatio >= 0.7) {
+    reasons.push('High distracting time recently')
+  } else if (effectiveDistractRatio >= 0.4) {
+    reasons.push('A lot of recent time is distracting')
+  } else if (effectiveDistractRatio >= 0.2) {
+    reasons.push('Some recent time is distracting')
+  }
+
+  const switchesPerMin = snapshot.signals.appSwitchesLast5Min / 5
+  if (isDistractingNow || effectiveDistractRatio >= 0.2) {
+    if (switchesPerMin >= 8) reasons.push('Very frequent app switching')
+    else if (switchesPerMin >= 4) reasons.push('Frequent app switching')
+    else if (switchesPerMin >= 2) reasons.push('Some app switching')
+  }
+
+  if (snapshot.focusIntent !== null && isDistractingNow) {
+    const where = snapshot.categories.activeDomain ?? snapshot.categories.activeApp
+    reasons.push(`Focus intent "${snapshot.focusIntent.label}" — but you're on ${where}`)
+  }
+
+  if (snapshot.signals.snoozesLast60Min >= 2) {
+    reasons.push(`Snoozed ${snapshot.signals.snoozesLast60Min} times in the last hour`)
+  }
+
+  if (isLateNightHour(getLocalHour(snapshot))) {
+    reasons.push('Late-night hours increase distraction')
+  }
+
+  if (reasons.length === 0 && score > 0) {
+    reasons.push('Mild distraction detected')
+  }
+
+  if (reasons.length === 0) {
+    reasons.push("You're focused — keep it up!")
+  }
+
+  return reasons
+}
+
