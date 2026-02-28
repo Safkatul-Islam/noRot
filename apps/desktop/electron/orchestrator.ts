@@ -69,7 +69,14 @@ export class Orchestrator {
   private readonly focusEngine = new FocusScoreEngine()
 
   private lastInterventionTs = 0
-  private activeIntervention: { id: string; triggeringApp: string } | null = null
+  private activeIntervention: {
+    id: string
+    triggeringApp: string
+    score: number
+    severity: Severity
+    persona: PersonaId
+    text: string
+  } | null = null
   private consecutiveCompliantSnapshots = 0
 
   constructor(options: { db: LocalDatabase; telemetry: TelemetryService; mainWindow: BrowserWindow; tray?: TrayManager }) {
@@ -305,7 +312,14 @@ export class Orchestrator {
     }
 
     this.lastInterventionTs = now
-    this.activeIntervention = { id, triggeringApp: snapshot.categories.activeApp }
+    this.activeIntervention = {
+      id,
+      triggeringApp: snapshot.categories.activeApp,
+      score: score.procrastinationScore,
+      severity: score.severity,
+      persona: score.recommendation.persona,
+      text
+    }
     this.consecutiveCompliantSnapshots = 0
 
     this.db.upsertInterventionState(id, 'pending', false)
@@ -345,17 +359,17 @@ export class Orchestrator {
     }
 
     if (this.consecutiveCompliantSnapshots >= 2) {
-      const id = this.activeIntervention.id
+      const { id, persona, severity, score, text } = this.activeIntervention
       this.activeIntervention = null
       this.consecutiveCompliantSnapshots = 0
       this.db.setInterventionResponse(id, 'dismissed')
       this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, {
         id,
         timestamp: Date.now(),
-        score: 0,
-        severity: 0,
-        persona: 'calm_friend',
-        text: '',
+        score,
+        severity,
+        persona,
+        text,
         userResponse: 'dismissed',
         audioPlayed: false
       })
