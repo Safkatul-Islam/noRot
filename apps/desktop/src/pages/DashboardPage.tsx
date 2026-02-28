@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 
+import { IPC_CHANNELS } from '../ipc-channels'
 import { useInterventions } from '../hooks/useInterventions'
 import { usePermissions } from '../hooks/usePermissions'
 import { useScore } from '../hooks/useScore'
@@ -131,13 +132,22 @@ export function DashboardPage() {
       <div className="rounded border border-white/10 bg-white/5 p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm text-white/70">Todos</div>
-          <button
-            type="button"
-            className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/15"
-            onClick={() => void openOverlay()}
-          >
-            Open overlay
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/15"
+              onClick={() => void window.norot.invoke(IPC_CHANNELS.voice.openVoiceChat, { mode: 'coach' })}
+            >
+              Voice chat
+            </button>
+            <button
+              type="button"
+              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/15"
+              onClick={() => void openOverlay()}
+            >
+              Open overlay
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 flex gap-2">
@@ -187,4 +197,3 @@ export function DashboardPage() {
     </div>
   )
 }
-
