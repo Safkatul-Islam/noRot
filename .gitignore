@@ -13,3 +13,8 @@ apikeys.md
 !.env.example
 hackstuff
 CLAUDE.md
+.venv/
+*.log
+.DS_Store
+Thumbs.db
+hackstuff
