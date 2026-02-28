@@ -2,27 +2,33 @@ import { BrowserWindow, ipcMain } from 'electron'
 
 import { IPC_CHANNELS } from './types'
 import { LocalDatabase } from './database'
+import type { TelemetryService } from './telemetry'
+import type { Orchestrator } from './orchestrator'
 
-let telemetryActive = false
 let didRegister = false
 
-export function registerIpcHandlers(options: { mainWindow: BrowserWindow; db: LocalDatabase }): void {
+export function registerIpcHandlers(options: {
+  mainWindow: BrowserWindow
+  db: LocalDatabase
+  telemetry: TelemetryService
+  orchestrator: Orchestrator
+}): void {
   if (didRegister) return
   didRegister = true
 
-  const { mainWindow, db } = options
+  const { mainWindow, db, orchestrator, telemetry } = options
 
   ipcMain.handle(IPC_CHANNELS.telemetry.start, () => {
-    telemetryActive = true
+    orchestrator.startTelemetry()
     return { ok: true }
   })
 
   ipcMain.handle(IPC_CHANNELS.telemetry.stop, () => {
-    telemetryActive = false
+    orchestrator.stopTelemetry()
     return { ok: true }
   })
 
-  ipcMain.handle(IPC_CHANNELS.telemetry.isActive, () => ({ active: telemetryActive }))
+  ipcMain.handle(IPC_CHANNELS.telemetry.isActive, () => ({ active: orchestrator.isTelemetryActive() }))
 
   ipcMain.handle(IPC_CHANNELS.settings.get, () => {
     return db.getAllSettings()
@@ -76,6 +82,45 @@ export function registerIpcHandlers(options: { mainWindow: BrowserWindow; db: Lo
     return { ok: true }
   })
 
+  ipcMain.handle(IPC_CHANNELS.interventions.respond, (_event, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
+    const { id, response } = payload as { id?: unknown; response?: unknown }
+    if (typeof id !== 'string') throw new Error('Invalid id')
+    if (response !== 'snoozed' && response !== 'dismissed' && response !== 'working') {
+      throw new Error('Invalid response')
+    }
+    orchestrator.respondToIntervention(id, response)
+    return { ok: true }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.interventions.testIntervention, (_event, payload: unknown) => {
+    void payload
+    const now = Date.now()
+    mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, {
+      id: 'test',
+      timestamp: now,
+      score: 90,
+      severity: 4,
+      persona: 'coach',
+      text: 'Test intervention',
+      userResponse: 'pending',
+      audioPlayed: false
+    })
+    mainWindow.webContents.send(IPC_CHANNELS.interventions.onPlayAudio, {
+      id: 'test',
+      text: 'Test intervention',
+      persona: 'coach',
+      severity: 4,
+      tts: { model: 'eleven_turbo_v2', stability: 55, speed: 0.98 }
+    })
+    return { ok: true }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.interventions.reportAudioPlayed, (_event, payload: unknown) => {
+    void payload
+    return { ok: true }
+  })
+
   ipcMain.on(IPC_CHANNELS.window.focusChanged, (_event, payload: unknown) => {
     // Forward focus changes to all windows except sender.
     for (const win of BrowserWindow.getAllWindows()) {
@@ -83,4 +128,6 @@ export function registerIpcHandlers(options: { mainWindow: BrowserWindow; db: Lo
       win.webContents.send(IPC_CHANNELS.window.focusChanged, payload)
     }
   })
+
+  void telemetry
 }

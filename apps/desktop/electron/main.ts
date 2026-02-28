@@ -4,12 +4,26 @@ import { join } from 'node:path'
 import { IPC_CHANNELS } from './types'
 import { registerIpcHandlers } from './ipc-handlers'
 import { LocalDatabase } from './database'
+import { TelemetryService } from './telemetry'
+import { Orchestrator } from './orchestrator'
+import type { CategoryRule, WorkOverride } from './database'
+import { TodoOverlayManager } from './todo-overlay'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let focusDebounce: NodeJS.Timeout | null = null
 let db: LocalDatabase | null = null
+let telemetry: TelemetryService | null = null
+let orchestrator: Orchestrator | null = null
+let todoOverlay: TodoOverlayManager | null = null
+
+function toDateKey(date: Date): string {
+  const yyyy = String(date.getFullYear())
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
 
 function getArgValue(prefix: string): string | null {
   const match = process.argv.find(arg => arg.startsWith(prefix))
@@ -109,8 +123,42 @@ app.whenReady().then(() => {
   const openedDb = LocalDatabase.open()
   db = openedDb
   mainWindow = createMainWindow()
-  registerIpcHandlers({ mainWindow, db: openedDb })
+
+  telemetry = new TelemetryService({
+    getRules: () => (openedDb.getSetting<CategoryRule[]>('categoryRules') ?? []),
+    getWorkOverrides: () => (openedDb.getSetting<WorkOverride[]>('workOverrides') ?? [])
+  })
+
+  orchestrator = new Orchestrator({ db: openedDb, telemetry, mainWindow })
+  orchestrator.start()
+
+  registerIpcHandlers({ mainWindow, db: openedDb, telemetry, orchestrator })
   createTray(mainWindow)
+
+  todoOverlay = new TodoOverlayManager(resolveRendererUrl)
+
+  if (orchestrator.shouldAutoStartTelemetry()) {
+    orchestrator.startTelemetry()
+  }
+
+  const shouldAutoCreateOverlay = () => {
+    const onboarding = openedDb.getSetting<boolean>('onboardingComplete')
+    const daily = openedDb.getSetting<string | null>('dailySetupDate')
+    const autoShow = openedDb.getSetting<boolean>('autoShowTodoOverlay')
+    const today = toDateKey(new Date())
+    return onboarding && daily === today && autoShow !== false
+  }
+
+  if (shouldAutoCreateOverlay()) {
+    todoOverlay.ensureCreated()
+  }
+
+  mainWindow.on('focus', () => todoOverlay?.hide())
+  mainWindow.on('blur', () => {
+    if (openedDb.getSetting<boolean>('autoShowTodoOverlay') !== false) {
+      todoOverlay?.show()
+    }
+  })
 
   app.on('activate', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -121,7 +169,17 @@ app.whenReady().then(() => {
     if (!db) {
       db = LocalDatabase.open()
     }
-    registerIpcHandlers({ mainWindow, db })
+    if (!telemetry) {
+      telemetry = new TelemetryService({
+        getRules: () => (db?.getSetting<CategoryRule[]>('categoryRules') ?? []),
+        getWorkOverrides: () => (db?.getSetting<WorkOverride[]>('workOverrides') ?? [])
+      })
+    }
+    if (!orchestrator && telemetry) {
+      orchestrator = new Orchestrator({ db, telemetry, mainWindow })
+      orchestrator.start()
+    }
+    registerIpcHandlers({ mainWindow, db, telemetry: telemetry!, orchestrator: orchestrator! })
     createTray(mainWindow)
   })
 })
