@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeImage, shell, Tray, Menu } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 
 import { IPC_CHANNELS } from './types'
@@ -8,9 +8,10 @@ import { TelemetryService } from './telemetry'
 import { Orchestrator } from './orchestrator'
 import type { CategoryRule, WorkOverride } from './database'
 import { TodoOverlayManager } from './todo-overlay'
+import { TrayManager } from './tray'
 
 let mainWindow: BrowserWindow | null = null
-let tray: Tray | null = null
+let trayManager: TrayManager | null = null
 let isQuitting = false
 let focusDebounce: NodeJS.Timeout | null = null
 let db: LocalDatabase | null = null
@@ -34,28 +35,6 @@ function getArgValue(prefix: string): string | null {
 
 function resolveRendererUrl(): string | null {
   return getArgValue('--renderer-url') ?? process.env.ELECTRON_RENDERER_URL ?? null
-}
-
-function createTray(window: BrowserWindow): void {
-  if (tray) return
-  const icon = nativeImage.createEmpty()
-  tray = new Tray(icon)
-  tray.setToolTip('noRot')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Show noRot', click: () => window.show() },
-      { label: 'Hide noRot', click: () => window.hide() },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          isQuitting = true
-          app.quit()
-        }
-      }
-    ])
-  )
-  tray.on('click', () => window.isVisible() ? window.hide() : window.show())
 }
 
 function createMainWindow(): BrowserWindow {
@@ -129,10 +108,10 @@ app.whenReady().then(() => {
     getWorkOverrides: () => (openedDb.getSetting<WorkOverride[]>('workOverrides') ?? [])
   })
 
-  orchestrator = new Orchestrator({ db: openedDb, telemetry, mainWindow })
-  orchestrator.start()
+  trayManager = new TrayManager(mainWindow)
 
-  createTray(mainWindow)
+  orchestrator = new Orchestrator({ db: openedDb, telemetry, mainWindow, tray: trayManager })
+  orchestrator.start()
 
   todoOverlay = new TodoOverlayManager(resolveRendererUrl)
   registerIpcHandlers({ mainWindow, db: openedDb, telemetry, orchestrator, todoOverlay })
@@ -166,6 +145,11 @@ app.whenReady().then(() => {
       return
     }
     mainWindow = createMainWindow()
+    if (trayManager) {
+      trayManager.destroy()
+      trayManager = null
+    }
+    trayManager = new TrayManager(mainWindow)
     if (!db) {
       db = LocalDatabase.open()
     }
@@ -176,14 +160,13 @@ app.whenReady().then(() => {
       })
     }
     if (!orchestrator && telemetry) {
-      orchestrator = new Orchestrator({ db, telemetry, mainWindow })
+      orchestrator = new Orchestrator({ db, telemetry, mainWindow, tray: trayManager })
       orchestrator.start()
     }
     if (!todoOverlay) {
       todoOverlay = new TodoOverlayManager(resolveRendererUrl)
     }
     registerIpcHandlers({ mainWindow, db, telemetry: telemetry!, orchestrator: orchestrator!, todoOverlay })
-    createTray(mainWindow)
   })
 })
 

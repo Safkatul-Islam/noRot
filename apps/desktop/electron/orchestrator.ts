@@ -20,6 +20,7 @@ import { IPC_CHANNELS } from './types'
 import { LocalDatabase } from './database'
 import type { JsonValue, SettingsKey, WorkOverride } from './database'
 import type { TelemetryService, TelemetryTick } from './telemetry'
+import type { TrayManager } from './tray'
 
 function toDateKey(date: Date): string {
   const yyyy = String(date.getFullYear())
@@ -64,16 +65,18 @@ export class Orchestrator {
   private readonly db: LocalDatabase
   private readonly telemetry: TelemetryService
   private readonly mainWindow: BrowserWindow
+  private readonly tray?: TrayManager
   private readonly focusEngine = new FocusScoreEngine()
 
   private lastInterventionTs = 0
   private activeIntervention: { id: string; triggeringApp: string } | null = null
   private consecutiveCompliantSnapshots = 0
 
-  constructor(options: { db: LocalDatabase; telemetry: TelemetryService; mainWindow: BrowserWindow }) {
+  constructor(options: { db: LocalDatabase; telemetry: TelemetryService; mainWindow: BrowserWindow; tray?: TrayManager }) {
     this.db = options.db
     this.telemetry = options.telemetry
     this.mainWindow = options.mainWindow
+    this.tray = options.tray
   }
 
   start(): void {
@@ -122,10 +125,12 @@ export class Orchestrator {
 
   startTelemetry(): void {
     this.telemetry.start()
+    this.tray?.update({ paused: !this.telemetry.isActive() })
   }
 
   stopTelemetry(): void {
     this.telemetry.stop()
+    this.tray?.update({ paused: !this.telemetry.isActive() })
   }
 
   isTelemetryActive(): boolean {
@@ -180,6 +185,14 @@ export class Orchestrator {
       },
       0
     ).severity
+
+    this.tray?.update({
+      paused: !this.telemetry.isActive(),
+      severity: liveSeverity,
+      activeApp: snap.categories.activeApp,
+      activeDomain: snap.categories.activeDomain ?? null,
+      activeCategory: snap.categories.activeCategory
+    })
 
     this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onLiveScoreUpdate, {
       timestamp: tick.timestamp,
