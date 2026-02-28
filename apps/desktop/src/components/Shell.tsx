@@ -38,6 +38,8 @@ export function Shell() {
         <div className="text-sm font-semibold">noRot</div>
         <div className="flex gap-2">
           <NavLink to="/" label="Dashboard" />
+          <NavLink to="/history" label="History" />
+          <NavLink to="/apps" label="Apps" />
           <NavLink to="/settings" label="Settings" />
         </div>
       </div>

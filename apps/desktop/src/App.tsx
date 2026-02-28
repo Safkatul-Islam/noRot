@@ -8,6 +8,8 @@ import { todayKey } from './lib/date'
 import { ContinuePromptPage } from './pages/ContinuePromptPage'
 import { DailySetupPage } from './pages/DailySetupPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { HistoryPage } from './pages/HistoryPage'
+import { AppsPage } from './pages/AppsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TodoOverlayPage } from './pages/TodoOverlayPage'
 import { WelcomePage } from './pages/WelcomePage'
@@ -70,6 +72,8 @@ export default function App() {
           <Routes>
             <Route element={<Shell />}>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="/apps" element={<AppsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Routes>
