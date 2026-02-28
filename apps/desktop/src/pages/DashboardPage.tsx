@@ -5,6 +5,7 @@ import { useInterventions } from '../hooks/useInterventions'
 import { usePermissions } from '../hooks/usePermissions'
 import { useScore } from '../hooks/useScore'
 import { useTodos } from '../hooks/useTodos'
+import { useWins } from '../hooks/useWins'
 import { useVoice } from '../hooks/useVoice'
 import { useSettingsStore } from '../stores/settings-store'
 
@@ -20,6 +21,7 @@ export function DashboardPage() {
   const { active, respond } = useInterventions()
   const { todos, createTodo, updateTodo, deleteTodo, openOverlay } = useTodos()
   const { status: permissions } = usePermissions()
+  const wins = useWins()
 
   const [toast, setToast] = useState<string | null>(null)
   const showToast = (message: string) => {
@@ -126,6 +128,28 @@ export function DashboardPage() {
           ) : (
             <div className="mt-3 text-sm text-white/70">No active intervention.</div>
           )}
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded border border-white/10 bg-white/5 p-4">
+          <div className="text-sm text-white/70">Wins</div>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded bg-white/5 p-3">
+              <div className="text-white/60">Refocus today</div>
+              <div className="mt-1 text-lg font-semibold">{wins ? String(wins.refocusCount) : '–'}</div>
+            </div>
+            <div className="rounded bg-white/5 p-3">
+              <div className="text-white/60">Focused minutes</div>
+              <div className="mt-1 text-lg font-semibold">{wins ? String(Math.round(wins.totalFocusedMinutes)) : '–'}</div>
+            </div>
+          </div>
+        </div>
+        <div className="rounded border border-white/10 bg-white/5 p-4">
+          <div className="text-sm text-white/70">Notes</div>
+          <div className="mt-2 text-sm text-white/70">
+            Enable Screen Recording/Accessibility on macOS for active-window telemetry. Configure ElevenLabs to enable voice.
+          </div>
         </div>
       </div>
 
