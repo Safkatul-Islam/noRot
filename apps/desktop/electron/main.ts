@@ -132,10 +132,10 @@ app.whenReady().then(() => {
   orchestrator = new Orchestrator({ db: openedDb, telemetry, mainWindow })
   orchestrator.start()
 
-  registerIpcHandlers({ mainWindow, db: openedDb, telemetry, orchestrator })
   createTray(mainWindow)
 
   todoOverlay = new TodoOverlayManager(resolveRendererUrl)
+  registerIpcHandlers({ mainWindow, db: openedDb, telemetry, orchestrator, todoOverlay })
 
   if (orchestrator.shouldAutoStartTelemetry()) {
     orchestrator.startTelemetry()
@@ -179,7 +179,10 @@ app.whenReady().then(() => {
       orchestrator = new Orchestrator({ db, telemetry, mainWindow })
       orchestrator.start()
     }
-    registerIpcHandlers({ mainWindow, db, telemetry: telemetry!, orchestrator: orchestrator! })
+    if (!todoOverlay) {
+      todoOverlay = new TodoOverlayManager(resolveRendererUrl)
+    }
+    registerIpcHandlers({ mainWindow, db, telemetry: telemetry!, orchestrator: orchestrator!, todoOverlay })
     createTray(mainWindow)
   })
 })

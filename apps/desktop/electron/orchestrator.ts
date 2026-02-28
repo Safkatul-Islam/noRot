@@ -101,6 +101,9 @@ export class Orchestrator {
 
   private getPersona(): PersonaId {
     const v = this.getSettingString('persona', 'calm_friend')
+    if (v === 'tough_love' && this.getSettingBoolean('toughLoveEnabled', false) !== true) {
+      return 'coach'
+    }
     if (v === 'calm_friend' || v === 'coach' || v === 'tough_love') return v
     return 'calm_friend'
   }

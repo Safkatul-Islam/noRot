@@ -19,11 +19,14 @@ export type SettingsKey =
   | 'autoShowTodoOverlay'
   | 'apiUrl'
   | 'persona'
+  | 'toughLoveEnabled'
   | 'scoreThreshold'
   | 'cooldownSeconds'
   | 'scriptSource'
   | 'geminiKey'
   | 'elevenLabsApiKey'
+  | 'voiceAgentId'
+  | 'checkinAgentId'
   | 'visionEnabled'
   | 'muted'
   | 'ttsEngine'
@@ -51,11 +54,14 @@ export interface SettingsState {
   autoShowTodoOverlay: boolean
   apiUrl: string
   persona: PersonaId
+  toughLoveEnabled: boolean
   scoreThreshold: number
   cooldownSeconds: number
   scriptSource: 'default' | 'gemini'
   geminiKey: string
   elevenLabsApiKey: string
+  voiceAgentId: string
+  checkinAgentId: string
   visionEnabled: boolean
   muted: boolean
   ttsEngine: 'auto' | 'elevenlabs' | 'local'
@@ -166,11 +172,14 @@ export class LocalDatabase {
       autoShowTodoOverlay: true,
       apiUrl: 'http://localhost:8000',
       persona: 'calm_friend',
+      toughLoveEnabled: false,
       scoreThreshold: 70,
       cooldownSeconds: 180,
       scriptSource: 'default',
       geminiKey: '',
       elevenLabsApiKey: '',
+      voiceAgentId: '',
+      checkinAgentId: '',
       visionEnabled: false,
       muted: false,
       ttsEngine: 'auto',
