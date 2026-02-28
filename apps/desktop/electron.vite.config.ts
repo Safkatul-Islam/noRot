@@ -32,7 +32,8 @@ export default defineConfig({
     resolve: {
       alias: {
         '@': resolve('src')
-      }
+      },
+      dedupe: ['react', 'react-dom']
     },
     plugins: [react()]
   }
