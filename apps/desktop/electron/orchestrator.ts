@@ -153,7 +153,7 @@ export class Orchestrator {
         this.markWorkingOverride(last.categories.activeApp, last.categories.activeDomain)
       }
     }
-    void id
+    this.db.setInterventionResponse(id, response)
     this.lastInterventionTs = Date.now()
     this.activeIntervention = null
     this.consecutiveCompliantSnapshots = 0
@@ -292,6 +292,8 @@ export class Orchestrator {
     this.activeIntervention = { id, triggeringApp: snapshot.categories.activeApp }
     this.consecutiveCompliantSnapshots = 0
 
+    this.db.upsertInterventionState(id, 'pending', false)
+
     const event = {
       id,
       timestamp: now,
@@ -330,6 +332,7 @@ export class Orchestrator {
       const id = this.activeIntervention.id
       this.activeIntervention = null
       this.consecutiveCompliantSnapshots = 0
+      this.db.setInterventionResponse(id, 'dismissed')
       this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, {
         id,
         timestamp: Date.now(),
