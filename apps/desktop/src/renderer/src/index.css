@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --severity-chill: #4ade80;
+  --severity-warning: #facc15;
+  --severity-danger: #f87171;
+  --severity-critical: #ef4444;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-surface backdrop-blur-[20px] border border-white/10;
+  }
+  .glass-light {
+    @apply bg-surface-light backdrop-blur-[16px] border border-white/5;
+  }
+  .glass-card {
+    @apply bg-surface-card backdrop-blur-[12px] border border-white/5 rounded-xl;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Typewriter animation */
+@keyframes typewriter {
+  from { width: 0; }
+  to { width: 100%; }
+}
+.typewriter {
+  overflow: hidden;
+  white-space: nowrap;
+  animation: typewriter 2s steps(40, end);
+}
+
+/* Pulse animation for score gauge */
+@keyframes pulse-glow {
+  0%, 100% { filter: drop-shadow(0 0 8px var(--glow-color, rgba(74, 222, 128, 0.4))); }
+  50% { filter: drop-shadow(0 0 20px var(--glow-color, rgba(74, 222, 128, 0.6))); }
+}
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
