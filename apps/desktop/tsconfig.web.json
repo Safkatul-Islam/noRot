@@ -2,14 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./out",
-    "rootDir": "./src/renderer/src",
+    "rootDir": "./src",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "paths": {
-      "@/*": ["./src/renderer/src/*"]
+      "@/*": ["./src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*"]
+  "include": ["src/**/*"]
 }

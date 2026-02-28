@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ['./src/renderer/**/*.{js,ts,jsx,tsx,html}'],
+  content: ['./src/**/*.{js,ts,jsx,tsx,html}'],
   theme: {
     extend: {
       colors: {
@@ -10,10 +10,11 @@ module.exports = {
           card: 'rgba(25, 25, 45, 0.6)'
         },
         severity: {
-          chill: '#4ade80',
-          warning: '#facc15',
-          danger: '#f87171',
-          critical: '#ef4444'
+          focused: '#22c55e',
+          drifting: '#eab308',
+          distracted: '#f97316',
+          procrastinating: '#ef4444',
+          crisis: '#a855f7'
         }
       },
       backdropBlur: {
