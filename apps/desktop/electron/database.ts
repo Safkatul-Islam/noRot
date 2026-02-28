@@ -278,6 +278,98 @@ export class LocalDatabase {
     }
   }
 
+  getScoreHistory(limit: number = 200): Array<{ timestamp: number; score: number; severity: number; reasons: string[]; recommendation: JsonValue }> {
+    const rows = this.db
+      .prepare<[number], { timestamp: number; score: number; severity: number; reasons: string; recommendation: string }>(
+        'SELECT timestamp,score,severity,reasons,recommendation FROM score_history ORDER BY timestamp DESC LIMIT ?'
+      )
+      .all(limit)
+
+    return rows.map(r => {
+      const reasons = safeJsonParse(r.reasons)
+      const rec = safeJsonParse(r.recommendation)
+      return {
+        timestamp: r.timestamp,
+        score: r.score,
+        severity: r.severity,
+        reasons: Array.isArray(reasons) ? (reasons as string[]) : [],
+        recommendation: rec
+      }
+    })
+  }
+
+  upsertInterventionState(id: string, userResponse: string, audioPlayed: boolean): void {
+    this.db
+      .prepare<[string, string, number]>(
+        `
+        INSERT INTO interventions(id,user_response,audio_played)
+        VALUES(?,?,?)
+        ON CONFLICT(id) DO UPDATE SET user_response=excluded.user_response, audio_played=excluded.audio_played
+        `
+      )
+      .run(id, userResponse, audioPlayed ? 1 : 0)
+  }
+
+  setInterventionResponse(id: string, userResponse: string): void {
+    this.db
+      .prepare<[string, string]>(
+        'UPDATE interventions SET user_response=? WHERE id=?'
+      )
+      .run(userResponse, id)
+  }
+
+  markInterventionAudioPlayed(id: string): void {
+    this.db
+      .prepare<[string]>(
+        'UPDATE interventions SET audio_played=1 WHERE id=?'
+      )
+      .run(id)
+  }
+
+  getWinsData(): { refocusCount: number; totalFocusedMinutes: number } {
+    const today = toDateKey(new Date())
+    const dateKey = this.getSetting<string | null>('refocusCountDate')
+    const count = (dateKey === today) ? (this.getSetting<number>('refocusCount') ?? 0) : 0
+
+    const row = this.db
+      .prepare<[], { data: string }>('SELECT data FROM telemetry_snapshots ORDER BY timestamp DESC LIMIT 1')
+      .get()
+    let totalFocusedMinutes = 0
+    if (row) {
+      const parsed = safeJsonParse(row.data) as unknown as { signals?: { productiveMinutes?: unknown } }
+      const minutes = parsed?.signals?.productiveMinutes
+      if (typeof minutes === 'number' && Number.isFinite(minutes)) totalFocusedMinutes = minutes
+    }
+
+    return { refocusCount: count, totalFocusedMinutes }
+  }
+
+  getAppStats(minutes: number): Array<{ appName: string; domain: string | null; category: string; count: number }> {
+    const since = Date.now() - minutes * 60 * 1000
+    const rows = this.db
+      .prepare<[number], { data: string }>('SELECT data FROM telemetry_snapshots WHERE timestamp >= ?')
+      .all(since)
+
+    const counts = new Map<string, { appName: string; domain: string | null; category: string; count: number }>()
+    for (const r of rows) {
+      const parsed = safeJsonParse(r.data) as unknown as { categories?: { activeApp?: unknown; activeDomain?: unknown; activeCategory?: unknown } }
+      const appName = parsed?.categories?.activeApp
+      const domain = parsed?.categories?.activeDomain
+      const category = parsed?.categories?.activeCategory
+      if (typeof appName !== 'string' || typeof category !== 'string') continue
+      const dom = typeof domain === 'string' ? domain : null
+      const key = `${appName}||${dom ?? ''}||${category}`
+      const existing = counts.get(key)
+      if (existing) {
+        existing.count += 1
+      } else {
+        counts.set(key, { appName, domain: dom, category, count: 1 })
+      }
+    }
+
+    return [...counts.values()].sort((a, b) => b.count - a.count)
+  }
+
   listTodos(): TodoRow[] {
     const rows = this.db
       .prepare<[], {
