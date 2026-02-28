@@ -65,7 +65,7 @@ export default function History() {
   ]
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div className="flex-1 overflow-y-auto p-4 space-y-4 animate-fade-in">
       <h2 className="text-lg font-bold text-white/90">Intervention History</h2>
 
       {/* Date filter */}

@@ -77,7 +77,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+    <div className="flex-1 overflow-y-auto p-4 space-y-6 animate-fade-in">
       <h2 className="text-lg font-bold text-white/90">Settings</h2>
 
       {/* Persona selection */}

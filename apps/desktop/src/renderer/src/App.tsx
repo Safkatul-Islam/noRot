@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/query-client'
 import { useSettingsStore } from './stores/settings-store'
@@ -7,6 +7,7 @@ import { useInterventionStore } from './stores/intervention-store'
 
 import Titlebar from './components/layout/Titlebar'
 import Navigation, { type TabId } from './components/layout/Navigation'
+import ErrorBoundary from './components/ErrorBoundary'
 import InterventionOverlay from './components/InterventionOverlay'
 import TodoOverlay from './components/TodoOverlay'
 
@@ -18,9 +19,10 @@ import Onboarding from './pages/Onboarding'
 
 function AppContent() {
   const { onboardingComplete, loaded, fetchSettings } = useSettingsStore()
-  const { startPolling, stopPolling } = useScoreStore()
-  const { initListener } = useInterventionStore()
+  const { startPolling, stopPolling, isMonitoring } = useScoreStore()
+  const { initListener, isOverlayVisible, dismiss } = useInterventionStore()
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
+  const [todoOverlayVisible, setTodoOverlayVisible] = useState(true)
 
   // Fetch settings on mount
   useEffect(() => {
@@ -38,6 +40,37 @@ function AppContent() {
     const unsub = initListener()
     return unsub
   }, [initListener])
+
+  // Keyboard shortcuts
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      // Ctrl+Shift+T: toggle todo overlay
+      if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+        e.preventDefault()
+        setTodoOverlayVisible((prev) => !prev)
+      }
+      // Ctrl+Shift+P: toggle monitoring pause
+      if (e.ctrlKey && e.shiftKey && e.key === 'P') {
+        e.preventDefault()
+        if (isMonitoring) {
+          stopPolling()
+        } else {
+          startPolling()
+        }
+      }
+      // Escape: dismiss intervention overlay
+      if (e.key === 'Escape' && isOverlayVisible) {
+        e.preventDefault()
+        dismiss()
+      }
+    },
+    [isMonitoring, isOverlayVisible, startPolling, stopPolling, dismiss]
+  )
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
 
   // Show loading while settings load
   if (!loaded) {
@@ -83,7 +116,7 @@ function AppContent() {
 
       {/* Overlays */}
       <InterventionOverlay />
-      <TodoOverlay />
+      {todoOverlayVisible && <TodoOverlay />}
     </div>
   )
 }
@@ -91,7 +124,9 @@ function AppContent() {
 function App(): JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppContent />
+      <ErrorBoundary>
+        <AppContent />
+      </ErrorBoundary>
     </QueryClientProvider>
   )
 }

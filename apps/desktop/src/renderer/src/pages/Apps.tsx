@@ -42,7 +42,7 @@ export default function Apps() {
   ]
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div className="flex-1 overflow-y-auto p-4 space-y-4 animate-fade-in">
       <h2 className="text-lg font-bold text-white/90">App Usage</h2>
 
       {/* Filter tabs */}

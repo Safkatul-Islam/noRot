@@ -59,7 +59,7 @@ export default function Dashboard() {
   const recentInterventions = interventionHistory.slice(0, 2)
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div className="flex-1 overflow-y-auto p-4 space-y-4 animate-fade-in">
       {/* Score Gauge */}
       <div className="flex flex-col items-center py-4">
         <ScoreGauge score={score} severity={severity} size={180} />
