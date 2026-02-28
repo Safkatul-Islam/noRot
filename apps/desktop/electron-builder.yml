@@ -1,0 +1,28 @@
+appId: com.norot.desktop
+productName: noRot
+
+directories:
+  output: dist
+
+asar: true
+asarUnpack:
+  - "**/*.node"
+
+files:
+  - "out/**/*"
+  - "package.json"
+  - "node_modules/**/*"
+
+mac:
+  icon: build/icon.icon
+  target:
+    - dmg
+  category: public.app-category.productivity
+
+dmg:
+  icon: build/icon.icns
+
+win:
+  icon: build/icon.png
+  target:
+    - nsis

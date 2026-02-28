@@ -1,106 +1,107 @@
-export type AppCategory =
-  | 'productive'
-  | 'neutral'
-  | 'distraction'
-  | 'social_media'
-  | 'gaming'
-  | 'entertainment'
-  | 'communication'
-  | 'development'
-  | 'design'
-  | 'writing'
-  | 'research'
-  | 'unknown'
-
-export type Severity = 'chill' | 'warning' | 'danger' | 'critical'
-
-export interface WindowEvent {
-  timestamp: number
-  app: string
-  title: string
-  category: AppCategory
-  isDistraction: boolean
+export interface FocusIntent {
+  label: string;
+  minutesRemaining: number;
 }
 
-export interface ActivityEntry {
-  id?: number
-  timestamp: number
-  app: string
-  title: string
-  category: AppCategory
-  duration: number // seconds spent
+export interface UsageSignals {
+  sessionMinutes: number;
+  distractingMinutes: number;
+  productiveMinutes: number;
+  appSwitchesLast5Min: number;
+  idleSecondsLast5Min: number;
+  timeOfDayLocal: string; // "HH:MM"
+  snoozesLast60Min: number;
+  recentDistractRatio?: number;
 }
 
-export interface ProcrastinationScore {
-  score: number // 0-100
-  severity: Severity
-  distractionRatio: number
-  switchRate: number
-  snoozePressure: number
-  topDistraction: string | null
-  minutesMonitored: number
+export interface UsageCategories {
+  activeApp: string;
+  activeCategory: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
+  activeDomain?: string;
+  activityLabel?: string;
+  activityKind?:
+    | 'unknown'
+    | 'coding'
+    | 'spreadsheets'
+    | 'presentations'
+    | 'writing'
+    | 'docs'
+    | 'email'
+    | 'chat'
+    | 'video'
+    | 'social_feed'
+    | 'shopping'
+    | 'games'
+    | 'settings'
+    | 'file_manager';
+  activityConfidence?: number;
+  activitySource?: 'rules' | 'vision';
+  contextTodo?: string;
+  contextOverride?: boolean;
 }
 
-export interface Todo {
-  id: number
-  text: string
-  completed: boolean
-  createdAt: number
-  completedAt: number | null
+export interface UsageSnapshot {
+  timestamp: string; // ISO 8601
+  focusIntent: FocusIntent | null;
+  signals: UsageSignals;
+  categories: UsageCategories;
 }
 
-export interface Intervention {
-  id?: number
-  timestamp: number
-  score: number
-  severity: Severity
-  script: string
-  persona: string
-  snoozed: boolean
-  dismissed: boolean
-  committedToWork: boolean
+export interface TTSSettings {
+  model: string;
+  stability: number;
+  speed: number;
 }
 
-export interface Win {
-  id?: number
-  timestamp: number
-  description: string
-  score: number
-  type: 'focus_streak' | 'todo_complete' | 'improvement' | 'custom'
+export interface Recommendation {
+  mode: 'none' | 'nudge' | 'remind' | 'interrupt' | 'crisis';
+  persona: Persona;
+  text: string;
+  tts: TTSSettings;
+  cooldownSeconds: number;
 }
 
-export interface AppStats {
-  app: string
-  category: AppCategory
-  totalSeconds: number
-  percentage: number
-  switches: number
+export interface ScoreResponse {
+  procrastinationScore: number;
+  severity: Severity;
+  reasons: string[];
+  recommendation: Recommendation;
 }
 
-export interface AppRule {
-  pattern: string
-  category: AppCategory
-  label?: string
+export interface InterventionEvent {
+  id: string;
+  timestamp: string;
+  score: number;
+  severity: Severity;
+  persona: Persona;
+  text: string;
+  userResponse: 'snoozed' | 'dismissed' | 'working' | 'pending';
+  audioPlayed: boolean;
 }
 
-export type PersonaId = 'drill_sergeant' | 'disappointed_parent' | 'chill_friend' | 'anime_rival' | 'therapist'
+export type Severity = 0 | 1 | 2 | 3 | 4;
+export type Persona = 'calm_friend' | 'coach' | 'tough_love';
+export type InterventionMode = 'none' | 'nudge' | 'remind' | 'interrupt' | 'crisis';
 
-export interface Persona {
-  id: PersonaId
-  name: string
-  description: string
-  voiceId: string // ElevenLabs voice ID
-  style: string
-  exampleLine: string
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
-export interface Settings {
-  persona: PersonaId
-  onboardingComplete: boolean
-  visionEnabled: boolean
-  elevenLabsApiKey: string
-  geminiApiKey: string
-  customAppRules: AppRule[]
-  snoozeCount: number
-  lastSnoozeTime: number | null
+export interface TodoItem {
+  id: string;
+  text: string;
+  done: boolean;
+  order: number;
+  app?: string;   // e.g. "VS Code", "Chrome"
+  url?: string;   // e.g. "github.com"
+  allowedApps?: string[];
+  deadline?: string; // time string e.g. "15:00"
+  startTime?: string; // time string e.g. "14:00"
+  durationMinutes?: number;
+}
+
+export interface WinsData {
+  refocusCount: number;
+  totalFocusedMinutes: number;
 }

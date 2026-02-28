@@ -1,117 +1,140 @@
-import type { ActivityEntry, AppCategory, ProcrastinationScore, Severity } from './types'
-import {
-  APP_RULES,
-  DISTRACTION_CATEGORIES,
-  LATE_NIGHT_END,
-  LATE_NIGHT_MULTIPLIER,
-  LATE_NIGHT_START,
-  SCORE_WEIGHTS,
-  SEVERITY_BANDS,
-  SNOOZE_ESCALATION
-} from './constants'
+import type { UsageSnapshot, Severity } from './types';
+import { SCORING_WEIGHTS, LATE_NIGHT_MULTIPLIER, SEVERITY_BANDS } from './constants';
 
-export function classifyApp(appName: string, title: string = ''): { category: AppCategory; label: string } {
-  const searchStr = `${appName} ${title}`.toLowerCase()
-
-  for (const rule of APP_RULES) {
-    if (searchStr.includes(rule.pattern.toLowerCase())) {
-      return { category: rule.category, label: rule.label || appName }
-    }
-  }
-
-  return { category: 'unknown', label: appName }
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
-export function isDistraction(category: AppCategory): boolean {
-  return DISTRACTION_CATEGORIES.has(category)
+function normalizeSwitchRate(switchesPerMin: number): number {
+  // 0-4 = low (0-0.4), 5-10 = medium (0.4-0.8), 11+ = high (0.8-1.0)
+  if (switchesPerMin <= 4) return switchesPerMin / 10;
+  if (switchesPerMin <= 10) return 0.4 + (switchesPerMin - 4) * (0.4 / 6);
+  return 0.8 + Math.min(switchesPerMin - 10, 5) * (0.2 / 5);
 }
 
-export function computeScore(
-  activities: ActivityEntry[],
-  snoozeCount: number = 0
-): ProcrastinationScore {
-  if (activities.length === 0) {
-    return {
-      score: 0,
-      severity: 'chill',
-      distractionRatio: 0,
-      switchRate: 0,
-      snoozePressure: 0,
-      topDistraction: null,
-      minutesMonitored: 0
-    }
-  }
-
-  const totalDuration = activities.reduce((sum, a) => sum + a.duration, 0)
-  const minutesMonitored = totalDuration / 60
-
-  // 1. Distraction ratio (0-100)
-  const distractionDuration = activities
-    .filter(a => isDistraction(a.category))
-    .reduce((sum, a) => sum + a.duration, 0)
-  const distractionRatio = totalDuration > 0 ? (distractionDuration / totalDuration) * 100 : 0
-
-  // 2. Switch rate (normalized 0-100)
-  // Count app switches (consecutive different apps)
-  let switches = 0
-  for (let i = 1; i < activities.length; i++) {
-    if (activities[i].app !== activities[i - 1].app) {
-      switches++
-    }
-  }
-  // Normalize: > 20 switches per 10 min = 100
-  const switchRate = Math.min((switches / Math.max(minutesMonitored, 1)) * 5, 100)
-
-  // 3. Snooze pressure (0-100)
-  const snoozeIndex = Math.min(snoozeCount, SNOOZE_ESCALATION.length - 1)
-  const snoozePressure = SNOOZE_ESCALATION[snoozeIndex] * 4 // scale to max 100
-
-  // Weighted score
-  let score =
-    distractionRatio * SCORE_WEIGHTS.distractionRatio +
-    switchRate * SCORE_WEIGHTS.switchRate +
-    snoozePressure * SCORE_WEIGHTS.snoozePressure
-
-  // Late night multiplier
-  const hour = new Date().getHours()
-  if (hour >= LATE_NIGHT_START || hour < LATE_NIGHT_END) {
-    score *= LATE_NIGHT_MULTIPLIER
-  }
-
-  score = Math.min(Math.round(score), 100)
-
-  // Find top distraction app
-  const distractionApps = new Map<string, number>()
-  for (const a of activities) {
-    if (isDistraction(a.category)) {
-      distractionApps.set(a.app, (distractionApps.get(a.app) || 0) + a.duration)
-    }
-  }
-  let topDistraction: string | null = null
-  let maxDuration = 0
-  for (const [app, dur] of distractionApps) {
-    if (dur > maxDuration) {
-      maxDuration = dur
-      topDistraction = app
-    }
-  }
-
-  return {
-    score,
-    severity: getSeverity(score),
-    distractionRatio: Math.round(distractionRatio),
-    switchRate: Math.round(switchRate),
-    snoozePressure: Math.round(snoozePressure),
-    topDistraction,
-    minutesMonitored: Math.round(minutesMonitored * 10) / 10
-  }
+function isLateNight(timeStr: string): boolean {
+  const hour = parseInt(timeStr.split(':')[0], 10);
+  return hour >= 23 || hour < 5;
 }
 
-export function getSeverity(score: number): Severity {
-  for (const band of SEVERITY_BANDS) {
-    if (score <= band.max) {
-      return band.severity
+export function calculateScore(snapshot: UsageSnapshot, snoozePressure: number = 0): { score: number; severity: Severity } {
+  const { signals, categories, focusIntent } = snapshot;
+
+  const distractRatio = signals.recentDistractRatio != null
+    ? signals.recentDistractRatio
+    : (signals.sessionMinutes > 0
+      ? signals.distractingMinutes / signals.sessionMinutes
+      : 0);
+
+  // Make the score respond quickly when the user is *currently* in a distracting category.
+  // Relying only on a rolling ratio can lag by minutes (especially in long sessions).
+  const isDistractingNow = categories.activeCategory === 'social' || categories.activeCategory === 'entertainment';
+  // Floor to a high ratio so the UI drops fast as soon as you enter distracting apps.
+  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio;
+
+  // `appSwitchesLast5Min` is a raw count in the last 5 minutes, but the scoring model
+  // expects a per-minute rate.
+  // See docs/error-patterns/focus-drops-while-productive.md
+  const switchesPerMin = signals.appSwitchesLast5Min / 5;
+  const normSwitchRate = normalizeSwitchRate(switchesPerMin);
+  const switchPenaltyEligible = isDistractingNow || clamp(effectiveDistractRatio, 0, 1) >= 0.2;
+  const normSwitchRateEffective = switchPenaltyEligible ? normSwitchRate : 0;
+
+  const intentGap = (focusIntent !== null &&
+    (categories.activeCategory === 'social' || categories.activeCategory === 'entertainment'))
+    ? 1 : 0;
+
+  const snoozePressureNorm = clamp(signals.snoozesLast60Min, 0, 3) / 3;
+
+  const base = 100 * (
+    SCORING_WEIGHTS.distractRatio * effectiveDistractRatio +
+    SCORING_WEIGHTS.switchRate * normSwitchRateEffective +
+    SCORING_WEIGHTS.intentGap * intentGap +
+    SCORING_WEIGHTS.snoozePressure * snoozePressureNorm
+  );
+
+  const lateNightMult = isLateNight(signals.timeOfDayLocal) ? LATE_NIGHT_MULTIPLIER : 1.0;
+  const score = clamp(Math.round((base + snoozePressure) * lateNightMult), 0, 100);
+
+  const band = SEVERITY_BANDS.find(b => score >= b.scoreMin && score <= b.scoreMax);
+  const severity: Severity = band ? band.severity : 0;
+
+  return { score, severity };
+}
+
+/**
+ * Escalate severity if the user has been snoozing interventions.
+ * Each 2 snoozes bumps severity up by 1, capped at 4.
+ *
+ * Matches apps/api/app/services/escalation.py:apply_snooze_escalation.
+ */
+export function applySnoozeEscalation(severity: Severity, snoozesLast60Min: number): Severity {
+  const bump = Math.floor(snoozesLast60Min / 2);
+  return Math.min(severity + bump, 4) as Severity;
+}
+
+/**
+ * Generate human-readable reasons that explain the procrastination score.
+ *
+ * This is the single source of truth — the Python API
+ * (apps/api/app/services/scoring.py:compute_reasons) must mirror this logic.
+ */
+export function generateReasons(snapshot: UsageSnapshot, score: number): string[] {
+  const reasons: string[] = [];
+  const { signals, categories, focusIntent } = snapshot;
+
+  // Distraction ratio (two tiers)
+  if (signals.sessionMinutes > 0) {
+    const ratio = signals.distractingMinutes / signals.sessionMinutes;
+    if (ratio > 0.5) {
+      reasons.push('Spending most of your time on distracting apps');
+    } else if (ratio > 0.25) {
+      reasons.push('Some time spent on distracting apps');
     }
   }
-  return 'critical'
+
+  // Switch rate (per-minute, two tiers)
+  const switchesPerMin = signals.appSwitchesLast5Min / 5;
+  if (switchesPerMin >= 11) {
+    reasons.push('Rapidly switching between apps');
+  } else if (switchesPerMin >= 5) {
+    reasons.push('Switching between apps frequently');
+  }
+
+  // Intent gap: using distracting app when focus intent is set
+  if (
+    focusIntent !== null &&
+    (categories.activeCategory === 'social' || categories.activeCategory === 'entertainment')
+  ) {
+    const domainInfo = categories.activeDomain ? ` on ${categories.activeDomain}` : '';
+    reasons.push(
+      `Using ${categories.activeApp}${domainInfo} instead of working on '${focusIntent.label}'`,
+    );
+  } else if (
+    categories.activeCategory === 'social' || categories.activeCategory === 'entertainment'
+  ) {
+    // No focus intent set — still note the distracting app
+    const domainInfo = categories.activeDomain ? ` on ${categories.activeDomain}` : '';
+    reasons.push(`Using ${categories.activeApp}${domainInfo} (${categories.activeCategory})`);
+  }
+
+  // Snooze pressure
+  if (signals.snoozesLast60Min >= 2) {
+    reasons.push(`Dismissed reminders ${signals.snoozesLast60Min} times recently`);
+  }
+
+  // Late night
+  if (isLateNight(signals.timeOfDayLocal)) {
+    reasons.push('Working late at night (scores are stricter after 11 PM)');
+  }
+
+  // Fallbacks
+  if (reasons.length === 0 && score > 0) {
+    reasons.push('Mild distraction detected');
+  }
+  if (reasons.length === 0) {
+    reasons.push("You're focused — keep it up!");
+  }
+
+  return reasons;
 }

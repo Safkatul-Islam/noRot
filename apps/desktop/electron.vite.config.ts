@@ -1,32 +1,43 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from 'tailwindcss'
-import autoprefixer from 'autoprefixer'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: {
-        external: ['better-sqlite3', 'get-windows', 'elevenlabs']
-      }
-    }
+      outDir: 'out/main',
+      lib: {
+        entry: resolve('electron/main.ts'),
+      },
+    },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      outDir: 'out/preload',
+      lib: {
+        entry: resolve('electron/preload.ts'),
+      },
+    },
   },
   renderer: {
+    publicDir: resolve('assets'),
+    plugins: [react(), tailwindcss()],
+    build: {
+      outDir: 'out/renderer',
+      rollupOptions: {
+        input: {
+          index: resolve('src/index.html'),
+        },
+      },
+    },
     resolve: {
       alias: {
-        '@': resolve('src/renderer/src')
-      }
+        '@': resolve('src'),
+      },
     },
-    plugins: [react()],
-    css: {
-      postcss: {
-        plugins: [tailwindcss(), autoprefixer()]
-      }
-    }
-  }
+    root: resolve('src'),
+  },
 })
