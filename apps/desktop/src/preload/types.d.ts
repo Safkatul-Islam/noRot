@@ -21,6 +21,8 @@ interface ElectronAPI {
   onScoreUpdate: (callback: (score: number) => void) => () => void
   onIntervention: (callback: (data: unknown) => void) => () => void
   onPlayAudio: (callback: (base64: string) => void) => () => void
+  sendAudioChunk: (data: ArrayBuffer) => Promise<void>
+  captureScreenshot: () => Promise<ArrayBuffer | null>
 }
 
 declare global {

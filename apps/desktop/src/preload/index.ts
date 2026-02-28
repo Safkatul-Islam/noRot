@@ -34,7 +34,9 @@ const electronAPI = {
     const sub = (_event: Electron.IpcRendererEvent, base64: string) => callback(base64)
     ipcRenderer.on('play-audio', sub)
     return () => ipcRenderer.removeListener('play-audio', sub)
-  }
+  },
+  sendAudioChunk: (data: ArrayBuffer) => ipcRenderer.invoke('send-audio-chunk', data),
+  captureScreenshot: () => ipcRenderer.invoke('capture-screenshot')
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

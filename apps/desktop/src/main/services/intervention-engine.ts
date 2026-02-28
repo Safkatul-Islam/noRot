@@ -3,11 +3,14 @@ import {
   INTERVENTION_SCORE_THRESHOLD,
   INTERVENTION_COOLDOWN,
   INTERVENTION_CHECK_INTERVAL,
+  PERSONA_CONFIGS,
   buildInterventionPrompt
 } from '@norot/shared'
 import type { PersonaId, Intervention } from '@norot/shared'
 import * as telemetry from './telemetry'
 import { getTodos, saveIntervention, getSetting } from './local-db'
+import { initTts, synthesizeSpeech, isConfigured as isTtsConfigured } from './tts'
+import { playAudioInRenderer } from './audio-player'
 
 let checkInterval: ReturnType<typeof setInterval> | null = null
 let lastInterventionTime = 0
@@ -25,6 +28,41 @@ export function resetCooldown(): void {
   lastInterventionTime = 0
 }
 
+async function tryGetApiScript(
+  score: ReturnType<typeof telemetry.getScore>,
+  persona: PersonaId,
+  recentApps: string[]
+): Promise<string | null> {
+  try {
+    const response = await fetch('http://localhost:8000/intervention', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        score: score.score,
+        severity: score.severity,
+        persona,
+        topDistraction: score.topDistraction,
+        distractionRatio: score.distractionRatio,
+        switchRate: score.switchRate,
+        recentApps,
+        minutesMonitored: score.minutesMonitored
+      }),
+      signal: AbortSignal.timeout(5000)
+    })
+
+    if (!response.ok) {
+      console.warn(`[intervention-engine] API returned ${response.status}, using local fallback`)
+      return null
+    }
+
+    const data = (await response.json()) as { script?: string }
+    return data.script || null
+  } catch (err) {
+    console.warn('[intervention-engine] API call failed, using local fallback:', err)
+    return null
+  }
+}
+
 async function triggerIntervention(): Promise<void> {
   if (!mainWindowRef || mainWindowRef.isDestroyed()) return
 
@@ -38,8 +76,11 @@ async function triggerIntervention(): Promise<void> {
   const todos = getTodos()
   const recentApps = telemetry.getRecentApps(5)
 
-  // Build the intervention prompt
-  const script = buildInterventionPrompt(score, persona, todos, recentApps)
+  // Step 1: Try API endpoint for Gemini-generated script, fallback to local prompt
+  let script = await tryGetApiScript(score, persona, recentApps)
+  if (!script) {
+    script = buildInterventionPrompt(score, persona, todos, recentApps)
+  }
 
   // Record this intervention
   const intervention: Intervention = {
@@ -68,6 +109,20 @@ async function triggerIntervention(): Promise<void> {
     topDistraction: score.topDistraction,
     distractionRatio: score.distractionRatio
   })
+
+  // Step 2: TTS audio — initialize if needed and synthesize speech
+  const elevenLabsApiKey = getSetting<string>('elevenLabsApiKey')
+  if (elevenLabsApiKey && !isTtsConfigured()) {
+    initTts(elevenLabsApiKey)
+  }
+
+  if (isTtsConfigured()) {
+    const personaConfig = PERSONA_CONFIGS[persona]
+    const audioBuffer = await synthesizeSpeech(script, personaConfig.voiceId)
+    if (audioBuffer && mainWindowRef && !mainWindowRef.isDestroyed()) {
+      playAudioInRenderer(mainWindowRef, audioBuffer)
+    }
+  }
 }
 
 export function startInterventionEngine(mainWindow: BrowserWindow): void {
