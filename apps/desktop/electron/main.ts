@@ -3,11 +3,13 @@ import { join } from 'node:path'
 
 import { IPC_CHANNELS } from './types'
 import { registerIpcHandlers } from './ipc-handlers'
+import { LocalDatabase } from './database'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let focusDebounce: NodeJS.Timeout | null = null
+let db: LocalDatabase | null = null
 
 function getArgValue(prefix: string): string | null {
   const match = process.argv.find(arg => arg.startsWith(prefix))
@@ -104,8 +106,10 @@ app.on('before-quit', () => {
 })
 
 app.whenReady().then(() => {
+  const openedDb = LocalDatabase.open()
+  db = openedDb
   mainWindow = createMainWindow()
-  registerIpcHandlers(mainWindow)
+  registerIpcHandlers({ mainWindow, db: openedDb })
   createTray(mainWindow)
 
   app.on('activate', () => {
@@ -114,7 +118,10 @@ app.whenReady().then(() => {
       return
     }
     mainWindow = createMainWindow()
-    registerIpcHandlers(mainWindow)
+    if (!db) {
+      db = LocalDatabase.open()
+    }
+    registerIpcHandlers({ mainWindow, db })
     createTray(mainWindow)
   })
 })
