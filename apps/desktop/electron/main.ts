@@ -34,7 +34,12 @@ function getArgValue(prefix: string): string | null {
 }
 
 function resolveRendererUrl(): string | null {
-  return getArgValue('--renderer-url') ?? process.env.ELECTRON_RENDERER_URL ?? null
+  return (
+    getArgValue('--renderer-url')
+    ?? process.env.VITE_DEV_SERVER_URL
+    ?? process.env.ELECTRON_RENDERER_URL
+    ?? null
+  )
 }
 
 function createMainWindow(): BrowserWindow {
