@@ -1,378 +1,483 @@
-import { randomUUID } from 'node:crypto'
-
-import type { BrowserWindow } from 'electron'
-
+import { powerSaveBlocker } from 'electron';
+import { randomUUID } from 'crypto';
+import type {
+  UsageSnapshot,
+  ScoreResponse,
+  InterventionEvent,
+  Severity,
+  Persona,
+} from '@norot/shared';
 import {
-  FocusScoreEngine,
-  INTERVENTION_SCRIPTS,
-  SEVERITY_BANDS,
-  SNOOZE_PRESSURE_DURATION_MIN,
-  SNOOZE_PRESSURE_POINTS,
-  MAX_SNOOZE_PRESSURE,
-  applySnoozeEscalation,
   calculateScore,
-  generateReasons,
-  stripEmotionTags
-} from '@norot/shared'
+  SEVERITY_BANDS,
+  SNOOZE_PRESSURE_POINTS,
+  SNOOZE_PRESSURE_DURATION_MIN,
+  MAX_SNOOZE_PRESSURE,
+} from '@norot/shared';
+import { IPC_CHANNELS, type UserSettings } from './types';
+import { createTelemetryCollector, type TelemetryCollector } from './telemetry';
+import * as apiClient from './api-client';
+import * as database from './database';
+import { updateTrayState } from './tray';
+import { buildInterventionText } from './intervention-text';
+import { buildStableRecommendationText } from './recommendation-text';
+import { generateScript, generateContextAwareScript } from './gemini-client';
+import { clearContextCache } from './context-checker';
+import { getMainWindow } from './window-manager';
 
-import type { PersonaId, Recommendation, ScoreResponse, Severity, UsageSnapshot } from '@norot/shared'
-import { IPC_CHANNELS } from './types'
-import { LocalDatabase } from './database'
-import type { JsonValue, SettingsKey, WorkOverride } from './database'
-import type { TelemetryService, TelemetryTick } from './telemetry'
-import type { TrayManager } from './tray'
-
-function toDateKey(date: Date): string {
-  const yyyy = String(date.getFullYear())
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const dd = String(date.getDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+function generateId(): string {
+  return randomUUID();
 }
 
-function getModeForSeverity(severity: Severity): Recommendation['mode'] {
-  const band = SEVERITY_BANDS.find(b => b.severity === severity)
-  return band?.mode ?? 'none'
+function resolveTimeZoneSetting(timeZoneSetting: string | undefined): string {
+  const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!timeZoneSetting || timeZoneSetting === 'system') return system || 'UTC';
+  return timeZoneSetting;
 }
 
-function getDefaultTtsSettings(severity: Severity): Recommendation['tts'] {
-  let stability = 45
-  let speed = 1.0
-  if (severity === 2 || severity === 3) {
-    stability = 35
-    speed = 1.08
-  } else if (severity === 4) {
-    stability = 55
-    speed = 0.98
-  }
-  return { model: 'eleven_turbo_v2', stability, speed }
+function parseHHMMToMinutes(val: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(val.trim());
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
 }
 
-function getDefaultCooldown(severity: Severity): number {
-  if (severity === 0) return 0
-  if (severity === 1) return 300
-  return 180
+function getNowMinutesInTimeZone(timeZoneSetting: string | undefined): number {
+  const timeZone = resolveTimeZoneSetting(timeZoneSetting);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date());
+    const h = Number(parts.find((p) => p.type === 'hour')?.value);
+    const m = Number(parts.find((p) => p.type === 'minute')?.value);
+    if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  } catch {
+    // ignore
+  }
+
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
 }
 
-function enforceToughLove(text: string): string {
-  const hasAllCaps = /[A-Z]{4,}/.test(text)
-  const hasProfanity = /\b(fuck|shit|damn|bitch|ass)\b/i.test(text)
-  if (hasAllCaps && hasProfanity) return text
-  const upper = stripEmotionTags(text).toUpperCase()
-  return `${upper} FUCKING DO IT.`
+interface OrchestratorState {
+  telemetryCollector: TelemetryCollector | null;
+  lastInterventionTime: number;
+  snoozePressure: number;
+  snoozeTimestamps: number[];
+  currentSettings: UserSettings;
+  activeInterventionId: string | null;
+  activeInterventionCategories: { activeApp: string; activeDomain?: string } | null;
+  complianceSnapshots: number;
 }
 
-export class Orchestrator {
-  private readonly db: LocalDatabase
-  private readonly telemetry: TelemetryService
-  private readonly mainWindow: BrowserWindow
-  private readonly tray?: TrayManager
-  private readonly focusEngine = new FocusScoreEngine()
+const state: OrchestratorState = {
+  telemetryCollector: null,
+  lastInterventionTime: 0,
+  snoozePressure: 0,
+  snoozeTimestamps: [],
+  currentSettings: null as unknown as UserSettings, // Lazily loaded after DB init
+  activeInterventionId: null,
+  activeInterventionCategories: null,
+  complianceSnapshots: 0,
+};
 
-  private lastInterventionTs = 0
-  private activeIntervention: {
-    id: string
-    triggeringApp: string
-    score: number
-    severity: Severity
-    persona: PersonaId
-    text: string
-  } | null = null
-  private consecutiveCompliantSnapshots = 0
+let settingsLoaded = false;
+let powerSaveBlockerId: number | null = null;
 
-  constructor(options: { db: LocalDatabase; telemetry: TelemetryService; mainWindow: BrowserWindow; tray?: TrayManager }) {
-    this.db = options.db
-    this.telemetry = options.telemetry
-    this.mainWindow = options.mainWindow
-    this.tray = options.tray
+function ensureSettings(): UserSettings {
+  if (!settingsLoaded) {
+    state.currentSettings = database.getSettings();
+    settingsLoaded = true;
+  }
+  return state.currentSettings;
+}
+
+function sendToRenderer(channel: string, data: unknown): void {
+  const win = getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send(channel, data);
+  }
+}
+
+function decaySnoozePressure(): number {
+  const now = Date.now();
+  const cutoff = now - SNOOZE_PRESSURE_DURATION_MIN * 60 * 1000;
+
+  // Remove expired snooze timestamps
+  state.snoozeTimestamps = state.snoozeTimestamps.filter((t) => t > cutoff);
+
+  // Cap pressure to avoid runaway escalation
+  if (state.snoozeTimestamps.length > MAX_SNOOZE_PRESSURE) {
+    state.snoozeTimestamps = state.snoozeTimestamps.slice(-MAX_SNOOZE_PRESSURE);
   }
 
-  start(): void {
-    this.telemetry.onTick = (t) => this.onTick(t)
-    this.telemetry.onSnapshot = (s) => void this.onSnapshot(s)
-  }
+  // Each active snooze adds SNOOZE_PRESSURE_POINTS
+  return state.snoozeTimestamps.length * SNOOZE_PRESSURE_POINTS;
+}
 
-  private getSettingBoolean(key: SettingsKey, fallback: boolean): boolean {
-    const v = this.db.getSetting<unknown>(key)
-    if (typeof v === 'boolean') return v
-    return fallback
-  }
+async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
+  try {
+    const settings = ensureSettings();
+    const isExplicitToughLove = settings.persona === 'tough_love' && settings.toughLoveExplicitAllowed === true;
 
-  private getSettingNumber(key: SettingsKey, fallback: number): number {
-    const v = this.db.getSetting<unknown>(key)
-    if (typeof v === 'number' && Number.isFinite(v)) return v
-    return fallback
-  }
+    // Store the raw snapshot
+    database.insertSnapshot(snapshot.timestamp, JSON.stringify(snapshot));
 
-  private getSettingString(key: SettingsKey, fallback: string): string {
-    const v = this.db.getSetting<unknown>(key)
-    if (typeof v === 'string') return v
-    return fallback
-  }
+    // Calculate snooze pressure
+    const snoozePressure = decaySnoozePressure();
 
-  private getPersona(): PersonaId {
-    const v = this.getSettingString('persona', 'calm_friend')
-    if (v === 'tough_love' && this.getSettingBoolean('toughLoveEnabled', false) !== true) {
-      return 'coach'
+    // Try API first, fall back to local scoring
+    const apiScoreResult = await apiClient.scoreSnapshot(
+      snapshot,
+      snoozePressure,
+      settings.persona
+    );
+    const scoreSource: 'api' | 'local' = apiScoreResult ? 'api' : 'local';
+    let scoreResult = apiScoreResult;
+
+    if (!scoreResult) {
+      // Local fallback
+      const { score, severity } = calculateScore(snapshot, snoozePressure);
+      const persona = settings.persona;
+      const band = SEVERITY_BANDS.find((b) => b.severity === severity);
+
+      scoreResult = {
+        procrastinationScore: score,
+        severity,
+        reasons: generateReasons(snapshot, score),
+        recommendation: {
+          mode: band?.mode || 'none',
+          persona,
+          text: '',
+          tts: { model: 'eleven_v3', stability: 35, speed: 1.08 },
+          cooldownSeconds: settings.cooldownSeconds,
+        },
+      };
     }
-    if (v === 'calm_friend' || v === 'coach' || v === 'tough_love') return v
-    return 'calm_friend'
-  }
 
-  private isDailySetupDoneToday(): boolean {
-    const key = this.db.getSetting<unknown>('dailySetupDate')
-    if (typeof key !== 'string' || key.length === 0) return false
-    return key === toDateKey(new Date())
-  }
+    // Stabilize the UI recommendation text so it doesn't "shuffle" every 5s update
+    // (Score API/Gemini can return varied scripts even when severity is unchanged.)
+    scoreResult.recommendation.text = buildStableRecommendationText(
+      scoreResult.severity,
+      scoreResult.recommendation.persona,
+    );
 
-  shouldAutoStartTelemetry(): boolean {
-    const onboarding = this.getSettingBoolean('onboardingComplete', false)
-    const monitoringEnabled = this.getSettingBoolean('monitoringEnabled', true)
-    return onboarding && this.isDailySetupDoneToday() && monitoringEnabled !== false
-  }
+    // Store the score
+    database.insertScore(scoreResult);
 
-  startTelemetry(): void {
-    this.telemetry.start()
-    this.tray?.update({ paused: !this.telemetry.isActive() })
-  }
+    // Send score update to renderer
+    sendToRenderer(IPC_CHANNELS.ON_SCORE_UPDATE, scoreResult);
 
-  stopTelemetry(): void {
-    this.telemetry.stop()
-    this.tray?.update({ paused: !this.telemetry.isActive() })
-  }
+    // Update tray icon with latest state
+    updateTrayState({
+      score: scoreResult.procrastinationScore,
+      severity: scoreResult.severity,
+      activeApp: snapshot.categories.activeApp,
+      activeCategory: snapshot.categories.activeCategory,
+      activeDomain: snapshot.categories.activeDomain,
+      telemetryActive: true,
+    });
 
-  isTelemetryActive(): boolean {
-    return this.telemetry.isActive()
-  }
+    // --- Compliance auto-dismiss check ---
+    if (state.activeInterventionId && state.activeInterventionCategories) {
+      const wasApp = state.activeInterventionCategories.activeApp;
+      const nowApp = snapshot.categories.activeApp;
+      const nowCategory = snapshot.categories.activeCategory;
+      const switchedAway = nowApp !== wasApp && (nowCategory === 'productive' || nowCategory === 'neutral');
 
-  snooze(): void {
-    this.telemetry.recordSnooze()
-    this.lastInterventionTs = Date.now()
-  }
+      if (switchedAway) {
+        state.complianceSnapshots++;
+      } else {
+        state.complianceSnapshots = 0;
+      }
 
-  markWorkingOverride(appName: string, domain?: string): void {
-    const now = Date.now()
-    const untilTs = now + 2 * 60 * 60 * 1000
-    const existing = this.db.getSetting<unknown>('workOverrides')
-    const overrides = Array.isArray(existing) ? (existing as WorkOverride[]) : []
-    const next: WorkOverride[] = overrides.concat([{ app: appName, domain, untilTs }])
-    this.db.setSetting('workOverrides', next as unknown as JsonValue)
-  }
-
-  respondToIntervention(id: string, response: 'snoozed' | 'dismissed' | 'working'): void {
-    if (response === 'snoozed') {
-      this.snooze()
-    } else if (response === 'working') {
-      this.db.incrementRefocusCount()
-      const last = this.lastSnapshot
-      if (last) {
-        this.markWorkingOverride(last.categories.activeApp, last.categories.activeDomain)
+      // Require 2 consecutive compliant snapshots (~10s) to avoid premature dismissal
+      if (state.complianceSnapshots >= 2) {
+        const interventionId = state.activeInterventionId;
+        sendToRenderer(IPC_CHANNELS.ON_INTERVENTION_DISMISS, { interventionId });
+        database.updateInterventionResponse(interventionId, 'dismissed');
+        console.log(`[orchestrator] Auto-dismissed intervention ${interventionId} after compliance`);
+        state.activeInterventionId = null;
+        state.activeInterventionCategories = null;
+        state.complianceSnapshots = 0;
       }
     }
-    this.db.setInterventionResponse(id, response)
-    this.lastInterventionTs = Date.now()
-    this.activeIntervention = null
-    this.consecutiveCompliantSnapshots = 0
+
+    // Check if we should intervene
+    const now = Date.now();
+    const cooldownMs = settings.cooldownSeconds * 1000;
+    const cooldownExpired = now - state.lastInterventionTime > cooldownMs;
+    const meetsThreshold =
+      scoreResult.procrastinationScore >= settings.scoreThreshold;
+    const hasRecommendation = scoreResult.recommendation.mode !== 'none';
+    console.log(
+      `[orchestrator] Decision: source=${scoreSource} score=${scoreResult.procrastinationScore} meetsThreshold=${meetsThreshold} cooldownExpired=${cooldownExpired} hasRecommendation=${hasRecommendation} | app="${snapshot.categories.activeApp}" category="${snapshot.categories.activeCategory}" domain="${snapshot.categories.activeDomain ?? 'none'}" recentRatio=${(snapshot.signals.recentDistractRatio ?? 0).toFixed(2)} distracting=${snapshot.signals.distractingMinutes}min session=${snapshot.signals.sessionMinutes}min`
+    );
+
+    if (meetsThreshold && cooldownExpired && hasRecommendation) {
+      let interventionText: string | null = null;
+
+      // Compute overdue todos (tasks past their deadline)
+      const activeTodos = database.getTodos().filter((t) => !t.done);
+      const nowMinutes = getNowMinutesInTimeZone(settings.timeZone);
+      const overdueTodos = activeTodos
+        .filter((t) => t.deadline)
+        .filter((t) => {
+          const dlMinutes = parseHHMMToMinutes(t.deadline!);
+          if (dlMinutes == null) return false;
+          return dlMinutes < nowMinutes;
+        })
+        .map((t) => ({ text: t.text, deadline: t.deadline! }));
+
+      if (settings.scriptSource === 'gemini' && settings.geminiApiKey) {
+        // Use context-aware generation when context info is available
+        if (snapshot.categories.contextOverride || snapshot.categories.contextTodo || overdueTodos.length > 0) {
+          interventionText = await generateContextAwareScript(
+            settings.geminiApiKey,
+            scoreResult.severity,
+            scoreResult.recommendation.persona,
+            {
+              appName: snapshot.categories.activeApp,
+              windowTitle: undefined,
+              domain: snapshot.categories.activeDomain,
+              activeTodos,
+              matchedTodo: snapshot.categories.contextTodo,
+              overdueTodos: overdueTodos.length > 0 ? overdueTodos : undefined,
+            },
+            settings.toughLoveExplicitAllowed,
+          );
+        } else {
+          interventionText = await generateScript(
+            settings.geminiApiKey,
+            scoreResult.severity,
+            scoreResult.recommendation.persona,
+            settings.toughLoveExplicitAllowed,
+          );
+        }
+      }
+
+      // Fall back to on-device script (also used when scriptSource is 'default')
+      if (!interventionText) {
+        interventionText = buildInterventionText(
+          scoreResult.severity,
+          scoreResult.recommendation.persona,
+          snapshot.categories,
+          overdueTodos.length > 0 ? overdueTodos : undefined,
+        );
+      }
+
+      // Ensure explicit Tough Love always curses + "screams", even if Gemini returns something mild.
+      if (isExplicitToughLove && interventionText) {
+        const hasProfanity = /\b(fuck|bitch|bastard|idiot|dumbass|stupid ass)\b/i.test(interventionText);
+        const hasScream = /[A-Z]{3,}/.test(interventionText);
+        if (!hasProfanity || !hasScream) {
+          interventionText = `STOP. LISTEN THE FUCK UP. ${interventionText}`;
+        }
+      }
+
+      // Make explicit Tough Love sound more "loud" for ElevenLabs by adjusting voice settings.
+      // If ElevenLabs rejects explicit content, renderer will fall back to local TTS.
+      const audioTts = isExplicitToughLove
+        ? {
+            ...scoreResult.recommendation.tts,
+            stability: scoreResult.severity >= 3 ? 15 : 20,
+            speed: scoreResult.severity >= 3 ? 1.2 : 1.15,
+          }
+        : scoreResult.recommendation.tts;
+
+      const intervention: InterventionEvent = {
+        id: generateId(),
+        timestamp: new Date().toISOString(),
+        score: scoreResult.procrastinationScore,
+        severity: scoreResult.severity,
+        persona: scoreResult.recommendation.persona,
+        text: interventionText ?? '',
+        userResponse: 'pending',
+        audioPlayed: false,
+      };
+
+      // Store and send intervention
+      database.insertIntervention(intervention);
+
+      // Track active intervention for compliance auto-dismiss
+      state.activeInterventionId = intervention.id;
+      state.activeInterventionCategories = {
+        activeApp: snapshot.categories.activeApp,
+        activeDomain: snapshot.categories.activeDomain,
+      };
+      state.complianceSnapshots = 0;
+
+      // Ensure the window is visible so the renderer processes IPC immediately
+      // (macOS deprioritizes hidden windows, causing stale interventions)
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        if (!win.isVisible()) win.show();
+        win.focus();
+      }
+
+      sendToRenderer(IPC_CHANNELS.ON_INTERVENTION, intervention);
+      console.log(
+        `[orchestrator] INTERVENTION FIRED: id=${intervention.id} score=${intervention.score} severity=${intervention.severity}`
+      );
+
+      // Always emit the audio request so the renderer can show a "muted/snoozed" toast.
+      // (Main process doesn't know about renderer-side snooze, and skipping the event
+      // makes the app feel broken when the intervention popup appears but there's no sound.)
+      if (interventionText) {
+        sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
+          ...scoreResult,
+          recommendation: {
+            ...scoreResult.recommendation,
+            text: interventionText,
+            tts: audioTts,
+          },
+          interventionId: intervention.id,
+        });
+      }
+
+      state.lastInterventionTime = now;
+    }
+  } catch (err) {
+    console.error('[orchestrator] Error processing snapshot:', err);
+  }
+}
+
+function generateReasons(snapshot: UsageSnapshot, score: number): string[] {
+  const reasons: string[] = [];
+  const { signals, categories } = snapshot;
+
+  if (signals.distractingMinutes > signals.productiveMinutes) {
+    reasons.push('Spending more time on distracting apps than productive work');
+  }
+  if (signals.appSwitchesLast5Min > 8) {
+    reasons.push('Switching between apps very frequently');
+  }
+  if (
+    categories.activeCategory === 'entertainment' ||
+    categories.activeCategory === 'social'
+  ) {
+    const domainInfo = categories.activeDomain
+      ? ` on ${categories.activeDomain}`
+      : '';
+    reasons.push(`Using ${categories.activeApp}${domainInfo} (${categories.activeCategory})`);
+  }
+  if (signals.snoozesLast60Min > 0) {
+    reasons.push(
+      `Dismissed reminders ${signals.snoozesLast60Min} times recently`
+    );
+  }
+  if (reasons.length === 0 && score > 0) {
+    reasons.push('Mild distraction detected');
+  }
+  if (reasons.length === 0) {
+    reasons.push('You\'re focused — keep it up!');
   }
 
-  private lastSnapshot: UsageSnapshot | null = null
+  return reasons;
+}
 
-  private onTick(tick: TelemetryTick): void {
-    const snap = tick.snapshotLike
-    const r = this.focusEngine.tick({
-      activeCategory: snap.categories.activeCategory,
-      appSwitchesLast5Min: snap.signals.appSwitchesLast5Min,
-      elapsedMs: tick.elapsedMs
-    })
+// --- Public API ---
 
-    const liveProcrastination = Math.max(0, Math.min(100, Math.round(100 - r.focusScore)))
-    const liveSeverity = calculateScore(
-      {
-        ...snap,
-        signals: { ...snap.signals, focusScore: r.focusScore }
-      },
-      0
-    ).severity
+export function startTelemetry(): void {
+  stopTelemetry();
 
-    this.tray?.update({
-      paused: !this.telemetry.isActive(),
-      severity: liveSeverity,
-      activeApp: snap.categories.activeApp,
-      activeDomain: snap.categories.activeDomain ?? null,
-      activeCategory: snap.categories.activeCategory
-    })
+  // Refresh settings
+  state.currentSettings = database.getSettings();
+  settingsLoaded = true;
+  console.log(
+    `[orchestrator] Settings loaded: threshold=${state.currentSettings.scoreThreshold} cooldown=${state.currentSettings.cooldownSeconds}s persona="${state.currentSettings.persona}" rulesCount=${state.currentSettings.categoryRules.length} geminiKey=${!!state.currentSettings.geminiApiKey}`
+  );
+  state.snoozePressure = 0;
+  state.snoozeTimestamps = [];
+  state.lastInterventionTime = 0;
+  state.activeInterventionId = null;
+  state.activeInterventionCategories = null;
+  state.complianceSnapshots = 0;
 
-    this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onLiveScoreUpdate, {
-      timestamp: tick.timestamp,
-      focusScore: r.focusScore,
-      procrastinationScore: liveProcrastination,
-      severity: liveSeverity
-    })
+  state.telemetryCollector = createTelemetryCollector(
+    () => ensureSettings().categoryRules,
+    () => ensureSettings().visionEnabled,
+    processSnapshot,
+    () => ensureSettings().geminiApiKey,
+    () => database.getTodos().filter((t) => !t.done),
+  );
+  state.telemetryCollector.start();
+
+  if (powerSaveBlockerId === null || !powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+    powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    console.log('[orchestrator] powerSaveBlocker started', { powerSaveBlockerId });
   }
 
-  private computeSnoozePressure(now: number): number {
-    const windowMs = SNOOZE_PRESSURE_DURATION_MIN * 60 * 1000
-    const cutoff = now - windowMs
-    const timestamps = this.telemetry.getSnoozeTimestamps().filter(ts => ts >= cutoff)
-    const count = Math.min(MAX_SNOOZE_PRESSURE, timestamps.length)
-    return count * SNOOZE_PRESSURE_POINTS
+  console.log('[orchestrator] Started telemetry');
+}
+
+export function stopTelemetry(): void {
+  if (state.telemetryCollector) {
+    state.telemetryCollector.stop();
+    state.telemetryCollector = null;
   }
 
-  private async onSnapshot(snapshotLike: UsageSnapshot): Promise<void> {
-    this.lastSnapshot = snapshotLike
+  // Set tray to inactive/gray
+  updateTrayState({
+    score: 0,
+    severity: 0,
+    activeApp: '',
+    activeCategory: '',
+    activeDomain: undefined,
+    telemetryActive: false,
+  });
 
-    const focusScore = this.focusEngine.focusScore
-    const snapshot: UsageSnapshot = {
-      ...snapshotLike,
-      signals: { ...snapshotLike.signals, focusScore }
-    }
+  if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+    powerSaveBlocker.stop(powerSaveBlockerId);
+    console.log('[orchestrator] powerSaveBlocker stopped', { powerSaveBlockerId });
+  }
+  powerSaveBlockerId = null;
 
-    this.db.insertTelemetrySnapshot(snapshot.timestamp, snapshot as unknown as never)
+  console.log('[orchestrator] Telemetry stopped');
+}
 
-    const snoozePressure = this.computeSnoozePressure(snapshot.timestamp)
-    const persona = this.getPersona()
-    const apiUrl = this.getSettingString('apiUrl', 'http://localhost:8000')
+export function handleInterventionResponse(
+  eventId: string,
+  response: 'snoozed' | 'dismissed' | 'working'
+): void {
+  database.updateInterventionResponse(eventId, response);
 
-    const scoreResponse = await this.tryApiScore(apiUrl, snapshot, snoozePressure, persona)
-      ?? this.localScore(snapshot, snoozePressure, persona)
-
-    this.db.insertScoreHistory(
-      snapshot.timestamp,
-      scoreResponse.procrastinationScore,
-      scoreResponse.severity,
-      scoreResponse.reasons,
-      scoreResponse.recommendation as unknown as never
-    )
-
-    this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onScoreUpdate, scoreResponse)
-
-    this.maybeAutoDismiss(snapshot)
-    this.maybeIntervene(snapshot, scoreResponse)
+  // Clear compliance tracking so auto-dismiss won't fire after user responds
+  if (state.activeInterventionId === eventId) {
+    state.activeInterventionId = null;
+    state.activeInterventionCategories = null;
+    state.complianceSnapshots = 0;
   }
 
-  private localScore(snapshot: UsageSnapshot, snoozePressure: number, persona: PersonaId): ScoreResponse {
-    const calculated = calculateScore(snapshot, snoozePressure)
-    const escalated = applySnoozeEscalation(calculated.severity, snapshot.signals.snoozesLast60Min)
-    const reasons = generateReasons(snapshot, calculated.procrastinationScore)
-
-    const text = INTERVENTION_SCRIPTS[persona][escalated]
-    const recommendation: Recommendation = {
-      mode: getModeForSeverity(escalated),
-      persona,
-      text,
-      tts: getDefaultTtsSettings(escalated),
-      cooldownSeconds: getDefaultCooldown(escalated)
+  if (response === 'snoozed') {
+    // Add snooze pressure
+    state.snoozeTimestamps.push(Date.now());
+    if (state.telemetryCollector) {
+      state.telemetryCollector.addSnooze();
     }
-
-    return {
-      procrastinationScore: calculated.procrastinationScore,
-      severity: escalated,
-      reasons,
-      recommendation
-    }
+  } else if (response === 'working') {
+    // Reward/acknowledge: extend cooldown and drop any accumulated snooze pressure.
+    const settings = ensureSettings();
+    state.snoozeTimestamps = [];
+    state.lastInterventionTime = Date.now() + settings.cooldownSeconds * 1000;
   }
+}
 
-  private async tryApiScore(
-    apiUrl: string,
-    snapshot: UsageSnapshot,
-    snoozePressure: number,
-    persona: PersonaId
-  ): Promise<ScoreResponse | null> {
-    const url = new URL('/score', apiUrl)
-    url.searchParams.set('snoozePressure', String(snoozePressure))
-    url.searchParams.set('persona', persona)
-    try {
-      const res = await fetch(url.toString(), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(snapshot)
-      })
-      if (!res.ok) return null
-      const json = (await res.json()) as unknown
-      return json as ScoreResponse
-    } catch {
-      return null
-    }
-  }
+export function refreshSettings(): void {
+  state.currentSettings = database.getSettings();
+  settingsLoaded = true;
+  clearContextCache();
+  console.log(
+    `[orchestrator] Settings refreshed: threshold=${state.currentSettings.scoreThreshold} cooldown=${state.currentSettings.cooldownSeconds}s`
+  );
+}
 
-  private maybeIntervene(snapshot: UsageSnapshot, score: ScoreResponse): void {
-    const now = Date.now()
-    const threshold = this.getSettingNumber('scoreThreshold', 70)
-    const cooldownSeconds = this.getSettingNumber('cooldownSeconds', 180)
-    const cooldownOk = now - this.lastInterventionTs >= cooldownSeconds * 1000
-
-    if (this.activeIntervention) return
-    if (!cooldownOk) return
-    if (score.procrastinationScore < threshold) return
-    if (score.recommendation.mode === 'none') return
-
-    const id = randomUUID()
-    let text = score.recommendation.text
-    if (score.recommendation.persona === 'tough_love') {
-      text = enforceToughLove(text)
-    }
-
-    this.lastInterventionTs = now
-    this.activeIntervention = {
-      id,
-      triggeringApp: snapshot.categories.activeApp,
-      score: score.procrastinationScore,
-      severity: score.severity,
-      persona: score.recommendation.persona,
-      text
-    }
-    this.consecutiveCompliantSnapshots = 0
-
-    this.db.upsertInterventionState(id, 'pending', false)
-
-    const event = {
-      id,
-      timestamp: now,
-      score: score.procrastinationScore,
-      severity: score.severity,
-      persona: score.recommendation.persona,
-      text,
-      userResponse: 'pending',
-      audioPlayed: false
-    }
-
-    this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, event)
-    this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onPlayAudio, {
-      id,
-      text,
-      persona: score.recommendation.persona,
-      severity: score.severity,
-      tts: score.recommendation.tts
-    })
-  }
-
-  private maybeAutoDismiss(snapshot: UsageSnapshot): void {
-    if (!this.activeIntervention) return
-
-    const triggeringApp = this.activeIntervention.triggeringApp
-    const switchedAway = snapshot.categories.activeApp !== triggeringApp
-    const compliantCategory = snapshot.categories.activeCategory === 'productive' || snapshot.categories.activeCategory === 'neutral'
-
-    if (switchedAway && compliantCategory) {
-      this.consecutiveCompliantSnapshots += 1
-    } else {
-      this.consecutiveCompliantSnapshots = 0
-    }
-
-    if (this.consecutiveCompliantSnapshots >= 2) {
-      const { id, persona, severity, score, text } = this.activeIntervention
-      this.activeIntervention = null
-      this.consecutiveCompliantSnapshots = 0
-      this.db.setInterventionResponse(id, 'dismissed')
-      this.mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, {
-        id,
-        timestamp: Date.now(),
-        score,
-        severity,
-        persona,
-        text,
-        userResponse: 'dismissed',
-        audioPlayed: false
-      })
-    }
-  }
+export function isTelemetryActive(): boolean {
+  return state.telemetryCollector?.isActive() ?? false;
 }
