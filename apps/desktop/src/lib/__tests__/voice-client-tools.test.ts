@@ -273,9 +273,9 @@ describe('createTodoClientTools', () => {
 
       const result = await tools.toggle_todo({ todo_text: 'essay' });
 
-      expect(result).toContain('Marked');
-      expect(result).toContain('done');
-      expect(backend.toggleTodo).toHaveBeenCalledWith('abc');
+      expect(result).toContain('Completed task');
+      expect(result).toContain('Write essay');
+      expect(backend.completeTodo).toHaveBeenCalledWith('abc');
     });
   });
 

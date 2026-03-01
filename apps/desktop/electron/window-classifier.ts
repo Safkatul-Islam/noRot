@@ -43,16 +43,21 @@ export function extractDomain(url?: string, title?: string): string | undefined 
 
   // Fallback: parse domain from window title
   if (title) {
+    const stripNotifCount = (s: string) => s.replace(/^\(\d+\)\s*/, '').trim();
+
     // Keep this robust across OS/browser title formats; see docs/error-patterns/window-activity-classification.md
     // Titles are usually "Page Title - Site Name - Browser" but separators vary across browsers/OSes.
     const segments = title
-      .split(/\s[-–—|•]\s/g)
+      // Split on:
+      // - spaced dashes: " - ", " – ", " — "
+      // - pipes/bullets with or without spaces: "|" and "•"
+      .split(/\s[-–—]\s|\s*\|\s*|\s*•\s*/g)
       .map((s) => s.trim())
       .filter(Boolean);
 
     // Check segments from the end (domain is usually near the end)
     for (let i = segments.length - 1; i >= 0; i--) {
-      const seg = segments[i].toLowerCase();
+      const seg = stripNotifCount(segments[i]).toLowerCase();
 
       // Check for well-known site names (e.g., "YouTube" in title)
       for (const [name, domain] of Object.entries(TITLE_DOMAIN_MAP)) {

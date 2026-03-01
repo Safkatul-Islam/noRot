@@ -19,6 +19,12 @@ describe('window-classifier', () => {
     it('supports non-hyphen separators used by some browsers', () => {
       expect(extractDomain(undefined, 'Some video — YouTube — Microsoft Edge')).toBe('youtube.com');
       expect(extractDomain(undefined, 'Home | Reddit | Brave')).toBe('reddit.com');
+      expect(extractDomain(undefined, 'Home|Reddit|Brave')).toBe('reddit.com');
+    });
+
+    it('handles notification counts in titles', () => {
+      expect(extractDomain(undefined, '(2) Instagram - Google Chrome')).toBe('instagram.com');
+      expect(extractDomain(undefined, '(12) Gmail - Google Chrome')).toBe('mail.google.com');
     });
   });
 
