@@ -16,9 +16,10 @@ interface TodoItemListProps {
   onUpdate?: (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => void;
   showAddInput?: boolean;
   enableAppDropdown?: boolean;
+  completingIds?: Set<string>;
 }
 
-export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showAddInput = true, enableAppDropdown = true }: TodoItemListProps) {
+export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showAddInput = true, enableAppDropdown = true, completingIds }: TodoItemListProps) {
   const [newText, setNewText] = useState('');
   const [showExtraFields, setShowExtraFields] = useState(false);
   const [newApp, setNewApp] = useState('');
@@ -185,15 +186,15 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                   className={cn(
                     'shrink-0 w-4 h-4 rounded-[4px] flex items-center justify-center mt-0.5',
                     'transition-all duration-200',
-                    todo.done
+                    (todo.done || completingIds?.has(todo.id))
                       ? 'bg-success/20 border border-success/40'
                       : 'bg-[var(--color-glass-well)] border border-white/[0.1] hover:border-white/[0.2]',
                   )}
-                  style={todo.done ? {
+                  style={(todo.done || completingIds?.has(todo.id)) ? {
                     boxShadow: '0 0 8px var(--color-glow-success)',
                   } : undefined}
                 >
-                  {todo.done && <Check className="size-2.5 text-success" />}
+                  {(todo.done || completingIds?.has(todo.id)) && <Check className="size-2.5 text-success" />}
                 </button>
 
                 {/* Text — click to edit */}
@@ -218,7 +219,7 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                       onClick={() => handleStartEdit(todo)}
                       className={cn(
                         'text-sm leading-relaxed block truncate',
-                        todo.done
+                        (todo.done || completingIds?.has(todo.id))
                           ? 'line-through text-text-muted opacity-60'
                           : 'text-text-primary',
                         onUpdate && 'cursor-text hover:text-primary transition-colors',

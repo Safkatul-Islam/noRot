@@ -1,4 +1,4 @@
-import type { ScoreResponse, InterventionEvent, TodoItem, WinsData, TTSSettings, Severity } from '@norot/shared';
+import type { ScoreResponse, InterventionEvent, TodoItem, CompletedTodoItem, WinsData, TTSSettings, Severity } from '@norot/shared';
 
 export interface CategoryRule {
   id: string;
@@ -119,6 +119,13 @@ export interface NoRotAPI {
   appendTodos(items: TodoItem[]): Promise<void>;
   onTodosUpdated(callback: (todos: TodoItem[]) => void): () => void;
 
+  // Completed todos
+  completeTodo(id: string): Promise<void>;
+  getCompletedTodos(): Promise<CompletedTodoItem[]>;
+  restoreTodo(id: string): Promise<void>;
+  deleteCompletedTodo(id: string): Promise<void>;
+  onCompletedTodosUpdated(callback: (todos: CompletedTodoItem[]) => void): () => void;
+
   // Todo overlay
   openTodoOverlay(): Promise<void>;
   closeTodoOverlay(): Promise<void>;
@@ -153,4 +160,4 @@ declare global {
 }
 
 export const norotAPI: NoRotAPI = window.norot;
-export type { ScoreResponse, InterventionEvent, TodoItem, WinsData };
+export type { ScoreResponse, InterventionEvent, TodoItem, CompletedTodoItem, WinsData };

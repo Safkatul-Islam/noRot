@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Maximize2, PanelRightClose } from 'lucide-react';
+import { Maximize2, PanelRightClose, ChevronDown } from 'lucide-react';
 import { TodoItemList } from '@/components/TodoItemList';
+import { CompletedTodoList } from '@/components/CompletedTodoList';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useTodos } from '@/hooks/useTodos';
 import { getNorotAPI } from '@/lib/norot-api';
 import { cn } from '@/lib/utils';
-import type { TodoItem } from '@norot/shared';
 
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 220;
@@ -17,10 +18,22 @@ interface TodoPanelProps {
 }
 
 export function TodoPanel({ open, onToggle }: TodoPanelProps) {
-  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const {
+    todos,
+    completedTodos,
+    completingIds,
+    handleToggle,
+    handleDelete,
+    handleAdd,
+    handleUpdate,
+    handleRestore,
+    handleDeleteCompleted,
+  } = useTodos();
+
   const [isOverlay, setIsOverlay] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   // Reset to push mode when panel re-opens
@@ -31,55 +44,6 @@ export function TodoPanel({ open, onToggle }: TodoPanelProps) {
       setIsDragging(false);
     }
   }, [open]);
-
-  const loadTodos = useCallback(async () => {
-    try {
-      const api = getNorotAPI();
-      const items = await api.getTodos();
-      setTodos(items);
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    loadTodos();
-    const api = getNorotAPI();
-    const unsub = api.onTodosUpdated((updated) => setTodos(updated));
-    return unsub;
-  }, [loadTodos]);
-
-  const handleToggle = async (id: string) => {
-    try {
-      await getNorotAPI().toggleTodo(id);
-    } catch { /* ignore */ }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      await getNorotAPI().deleteTodo(id);
-    } catch { /* ignore */ }
-  };
-
-  const handleAdd = async (text: string, app?: string, url?: string) => {
-    try {
-      const newTodo: TodoItem = {
-        id: crypto.randomUUID(),
-        text,
-        done: false,
-        order: todos.length,
-        ...(app ? { app } : {}),
-        ...(url ? { url } : {}),
-      };
-      await getNorotAPI().addTodo(newTodo);
-    } catch { /* ignore */ }
-  };
-
-  const handleUpdate = async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
-    try {
-      await getNorotAPI().updateTodo(id, fields);
-    } catch { /* ignore */ }
-  };
 
   const handlePopOut = async () => {
     try {
@@ -187,7 +151,51 @@ export function TodoPanel({ open, onToggle }: TodoPanelProps) {
                 onDelete={handleDelete}
                 onAdd={handleAdd}
                 onUpdate={handleUpdate}
+                completingIds={completingIds}
               />
+
+              {/* Recently Completed section */}
+              {completedTodos.length > 0 && (
+                <div className="mt-4">
+                  <button
+                    onClick={() => setShowCompleted(!showCompleted)}
+                    className={cn(
+                      'flex items-center gap-1.5 w-full text-left',
+                      'text-xs text-text-muted hover:text-text-secondary transition-colors',
+                      'mb-2',
+                    )}
+                  >
+                    <ChevronDown
+                      className={cn(
+                        'size-3 transition-transform duration-200',
+                        !showCompleted && '-rotate-90',
+                      )}
+                    />
+                    <span>Recently Completed ({completedTodos.length})</span>
+                  </button>
+
+                  <AnimatePresence>
+                    {showCompleted && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <CompletedTodoList
+                          todos={completedTodos}
+                          onRestore={handleRestore}
+                          onDelete={handleDeleteCompleted}
+                        />
+                        <p className="text-[10px] text-text-muted mt-2 px-1">
+                          Completed tasks are stored for 30 days
+                        </p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
             </div>
           </ScrollArea>
         </motion.aside>

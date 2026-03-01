@@ -106,6 +106,19 @@ export interface TodoItem {
   durationMinutes?: number;
 }
 
+export interface CompletedTodoItem {
+  id: string;
+  text: string;
+  order: number;
+  app?: string;
+  url?: string;
+  allowedApps?: string[];
+  deadline?: string;
+  startTime?: string;
+  durationMinutes?: number;
+  completedAt: string; // ISO 8601 timestamp
+}
+
 export interface WinsData {
   refocusCount: number;
   totalFocusedMinutes: number;

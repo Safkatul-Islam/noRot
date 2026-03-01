@@ -273,6 +273,33 @@ contextBridge.exposeInMainWorld('norot', {
     };
   },
 
+  // --- Completed Todos ---
+  completeTodo: (id: string): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.COMPLETE_TODO, id);
+  },
+
+  getCompletedTodos: (): Promise<unknown[]> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_COMPLETED_TODOS);
+  },
+
+  restoreTodo: (id: string): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.RESTORE_TODO, id);
+  },
+
+  deleteCompletedTodo: (id: string): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.DELETE_COMPLETED_TODO, id);
+  },
+
+  onCompletedTodosUpdated: (callback: (todos: unknown[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, todos: unknown[]) => {
+      callback(todos);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_COMPLETED_TODOS_UPDATED, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_COMPLETED_TODOS_UPDATED, handler);
+    };
+  },
+
   // --- Todo Overlay ---
   openTodoOverlay: (): Promise<void> => {
     return ipcRenderer.invoke(IPC_CHANNELS.OPEN_TODO_OVERLAY);

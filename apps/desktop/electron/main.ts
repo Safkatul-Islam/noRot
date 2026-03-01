@@ -148,6 +148,20 @@ app.whenReady().then(() => {
   // Initialize database before anything else
   database.initDatabase();
 
+  // Purge completed todos older than 30 days
+  const purged = database.purgeOldCompletedTodos();
+  if (purged > 0) {
+    console.log(`[main] Purged ${purged} completed todo(s) older than 30 days`);
+  }
+
+  // Periodic purge every hour
+  setInterval(() => {
+    const count = database.purgeOldCompletedTodos();
+    if (count > 0) {
+      console.log(`[main] Hourly purge: removed ${count} completed todo(s)`);
+    }
+  }, 60 * 60 * 1000);
+
   // Register all IPC handlers
   registerIpcHandlers();
 
