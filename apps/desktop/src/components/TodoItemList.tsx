@@ -239,13 +239,6 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                           {todo.url}
                         </span>
                       )}
-                      {todo.deadline && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
-                          <AlarmClock className="size-2.5" />
-                          {formatTime(todo.deadline)}
-                          {timeZoneLabel ? ` ${timeZoneLabel}` : ''}
-                        </span>
-                      )}
                       {todo.startTime && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
                           <Clock className="size-2.5" />
@@ -257,6 +250,13 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
                           <Timer className="size-2.5" />
                           {formatDurationMinutes(todo.durationMinutes)}
+                        </span>
+                      )}
+                      {todo.deadline && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
+                          <AlarmClock className="size-2.5" />
+                          {formatTime(todo.deadline)}
+                          {timeZoneLabel ? ` ${timeZoneLabel}` : ''}
                         </span>
                       )}
                     </div>

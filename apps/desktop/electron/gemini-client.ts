@@ -211,6 +211,7 @@ export async function* streamChat(
 export async function extractTodosWithApps(
   apiKey: string,
   transcript: string,
+  timeZoneSetting?: string,
 ): Promise<TodoItem[]> {
   try {
     const client = getClient(apiKey);
@@ -227,6 +228,71 @@ export async function extractTodosWithApps(
       return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     }
 
+    function resolveTimeZoneSetting(val: string | undefined): string {
+      const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (!val || val === 'system') return system || 'UTC';
+      return val;
+    }
+
+    function getNowMinutesInTimeZone(val: string | undefined): number {
+      const timeZone = resolveTimeZoneSetting(val);
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }).formatToParts(new Date());
+        const h = Number(parts.find((p) => p.type === 'hour')?.value);
+        const m = Number(parts.find((p) => p.type === 'minute')?.value);
+        if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+      } catch {
+        // ignore
+      }
+
+      const d = new Date();
+      return d.getHours() * 60 + d.getMinutes();
+    }
+
+    function minutesToHHMM(totalMinutes: number): string {
+      const m = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+      const hh = Math.floor(m / 60);
+      const mm = m % 60;
+      return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+
+    function hhmmToMinutes(hhmm: string): number | null {
+      const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
+      if (!m) return null;
+      const hh = Number(m[1]);
+      const mm = Number(m[2]);
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+      if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+      return hh * 60 + mm;
+    }
+
+    function normalizeDurationMinutes(val: unknown): number | undefined {
+      if (typeof val !== 'number' || !Number.isFinite(val)) return undefined;
+      const n = Math.round(val);
+      if (n < 5) return undefined;
+      if (n > 24 * 60) return undefined;
+      return n;
+    }
+
+    function normalizeOffsetMinutes(val: unknown, opts: { allowZero: boolean }): number | undefined {
+      if (typeof val !== 'number' || !Number.isFinite(val)) return undefined;
+      const n = Math.round(val);
+      if (opts.allowZero) {
+        if (n < 0) return undefined;
+      } else {
+        if (n <= 0) return undefined;
+      }
+      if (n > 24 * 60) return undefined;
+      return n;
+    }
+
+    const nowMinutes = getNowMinutesInTimeZone(timeZoneSetting);
+
     const systemInstruction =
       'You are a task extraction assistant for noRot, a computer productivity tool. ' +
       'Given a conversation transcript, extract clear, actionable to-do items the user can do on their computer (apps/websites). ' +
@@ -238,9 +304,12 @@ export async function extractTodosWithApps(
       'a URL if applicable, and a list of allowed apps/websites relevant to that task. ' +
       'If you cannot suggest a reasonable app/allowed list, omit the task. ' +
       'If timing is not stated clearly, omit it (do not guess). ' +
-      'If a deadline is mentioned (e.g. "by 5pm"), include deadline in HH:MM 24-hour time. ' +
-      'If a start time is mentioned (e.g. "starting at 3pm", "at 14:00"), include startTime in HH:MM 24-hour time. ' +
-      'If duration is mentioned (e.g. "takes 2 hours", "about 30 minutes"), include durationMinutes as a number.';
+      'For explicit time-of-day statements, use HH:MM 24-hour format: ' +
+      'deadline ("by 5pm" -> "17:00"), startTime ("start at 3pm" -> "15:00"). ' +
+      'For relative timing you MUST NOT guess an HH:MM time. Instead use minute offsets from now: ' +
+      'startOffsetMinutes ("right now" -> 0, "start in 30 minutes" -> 30) and ' +
+      'deadlineOffsetMinutes ("finish in 2 hours" / "two hours from now" -> 120). ' +
+      'If duration is explicitly mentioned ("takes 2 hours", "about 30 minutes"), include durationMinutes as an integer number of minutes (e.g. 120, 30).';
 
     const response = await client.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -284,6 +353,14 @@ export async function extractTodosWithApps(
                 type: Type.NUMBER,
                 description: 'Estimated duration in minutes if explicitly stated (e.g. 30, 60, 120)',
               },
+              startOffsetMinutes: {
+                type: Type.NUMBER,
+                description: 'Start time offset from now in minutes (e.g. 0 for now, 30 for in 30 minutes)',
+              },
+              deadlineOffsetMinutes: {
+                type: Type.NUMBER,
+                description: 'Deadline offset from now in minutes (e.g. 120 for in 2 hours)',
+              },
             },
             required: ['text'],
           },
@@ -299,16 +376,46 @@ export async function extractTodosWithApps(
       deadline?: string;
       startTime?: string;
       durationMinutes?: number;
+      startOffsetMinutes?: number;
+      deadlineOffsetMinutes?: number;
     }>;
 
     const mapped = raw
       .map((item, i) => {
-        const deadline = normalizeDeadline(item.deadline);
-        const startTime = normalizeDeadline(item.startTime);
-        const durationMinutes =
-          typeof item.durationMinutes === 'number' && item.durationMinutes > 0
-            ? Math.trunc(item.durationMinutes)
-            : undefined;
+        let durationMinutes = normalizeDurationMinutes(item.durationMinutes);
+
+        const startOffsetMinutes = normalizeOffsetMinutes(item.startOffsetMinutes, { allowZero: true });
+        const deadlineOffsetMinutes = normalizeOffsetMinutes(item.deadlineOffsetMinutes, { allowZero: false });
+
+        const startTime =
+          normalizeDeadline(item.startTime) ??
+          (typeof startOffsetMinutes === 'number'
+            ? minutesToHHMM(nowMinutes + startOffsetMinutes)
+            : undefined);
+
+        let deadline =
+          normalizeDeadline(item.deadline) ??
+          (typeof deadlineOffsetMinutes === 'number'
+            ? minutesToHHMM(nowMinutes + deadlineOffsetMinutes)
+            : undefined);
+
+        if (!deadline && startTime && typeof durationMinutes === 'number') {
+          const startMinutes = hhmmToMinutes(startTime);
+          if (startMinutes != null) {
+            deadline = minutesToHHMM(startMinutes + durationMinutes);
+          }
+        }
+
+        // If user gave start + deadline but not duration, infer duration.
+        if (!durationMinutes && startTime && deadline) {
+          const startMinutes = hhmmToMinutes(startTime);
+          const deadlineMinutes = hhmmToMinutes(deadline);
+          if (startMinutes != null && deadlineMinutes != null) {
+            const rawDiff = deadlineMinutes - startMinutes;
+            const diff = rawDiff >= 0 ? rawDiff : rawDiff + 24 * 60;
+            durationMinutes = normalizeDurationMinutes(diff);
+          }
+        }
         const text = typeof item.text === 'string' ? item.text.trim() : '';
         return {
           id: randomUUID(),

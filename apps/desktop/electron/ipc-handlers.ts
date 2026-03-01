@@ -449,7 +449,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.EXTRACT_TODOS, async (_event, transcript: string) => {
     const settings = database.getSettings();
     if (!settings.geminiApiKey) return [];
-    return extractTodosWithApps(settings.geminiApiKey, transcript);
+    return extractTodosWithApps(settings.geminiApiKey, transcript, settings.timeZone);
   });
 
   ipcMain.handle(IPC_CHANNELS.GET_TODOS, () => {
