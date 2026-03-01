@@ -5,7 +5,6 @@ from fastapi import APIRouter, Query
 from ..models import (
     Recommendation,
     ScoreResponse,
-    TTSSettings,
     UsageSnapshot,
 )
 from ..services.scoring import compute_score, compute_reasons
@@ -14,7 +13,7 @@ from ..services.escalation import (
     apply_snooze_escalation,
     get_mode,
 )
-from ..services.scripts import get_intervention_text, get_tts_settings, get_cooldown
+from ..services.scripts import get_script_with_context, get_tts_settings, get_cooldown
 from .. import db
 
 router = APIRouter()
@@ -44,11 +43,13 @@ async def score_snapshot(
 
     # 3. Build the recommendation
     mode = get_mode(severity)
-    text = get_intervention_text(persona, severity)
-    tts_raw = get_tts_settings(persona, severity)
-    tts = TTSSettings(
-        model=tts_raw["model"], stability=tts_raw["stability"], speed=tts_raw["speed"]
+    text = get_script_with_context(
+        persona,
+        severity,
+        active_app=snapshot.categories.active_app,
+        active_domain=snapshot.categories.active_domain,
     )
+    tts = get_tts_settings(severity)
     cooldown = get_cooldown(severity)
 
     recommendation = Recommendation(

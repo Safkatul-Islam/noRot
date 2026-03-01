@@ -15,7 +15,7 @@ import { useAppStore } from '@/stores/app-store';
 import { useSettingsStore, ACCENT_PRESETS, ACCENT_IDS } from '@/stores/settings-store';
 import type { AccentColorId } from '@/stores/settings-store';
 import { useStartupFlowStore } from '@/stores/startup-flow-store';
-import { SEVERITY_BANDS, PERSONAS, INTERVENTION_SCRIPTS, stripEmotionTags, VOICE_PRESETS, resolveVoiceId } from '@norot/shared';
+import { SEVERITY_BANDS, PERSONAS, stripEmotionTags, VOICE_PRESETS, resolveVoiceId } from '@norot/shared';
 import type { Severity, Persona } from '@norot/shared';
 import { cn } from '@/lib/utils';
 import {
@@ -41,12 +41,84 @@ import {
   Mic,
 } from 'lucide-react';
 
+// Representative preview variants per persona×severity (mirrors intervention-text.ts).
+// Randomly sampled so the settings page shows varied examples.
+const PREVIEW_VARIANTS: Record<Persona, Record<1 | 2 | 3 | 4, string[]>> = {
+  calm_friend: {
+    1: [
+      'Quick check-in: looks like you\'ve been off task for a bit. Want to refocus?',
+      'No judgment — you\'re drifting. What\'s one tiny next step you can do right now?',
+      'Small nudge: you\'re off task. Can you do 60 seconds of the real task first?',
+    ],
+    2: [
+      'I notice you\'ve been off task for a while. What\'s the next small step on your task?',
+      'You\'re getting pulled away. Can you name the task you meant to do?',
+      'Looks like distraction is winning right now. Want to pick one 5-minute step?',
+    ],
+    3: [
+      'You\'ve been off task for a bit now. What\'s making it hard to start?',
+      'You\'re deep in distraction. What\'s one "minimum effort" version of your task?',
+      'Let\'s interrupt the loop. What\'s the next step you\'d tell a friend to do?',
+    ],
+    4: [
+      'Hey. I can see things feel heavy right now. Can we do one tiny grounding step together?',
+      'This looks like a rough moment. Do you need a break, or a smaller version of the task?',
+      'You don\'t have to fix everything. What\'s one tiny action that helps Future You?',
+    ],
+  },
+  coach: {
+    1: [
+      'Check-in: you\'re drifting. Reset your posture and pick the next action.',
+      'Heads up — you\'re off task. What\'s the goal for the next 5 minutes?',
+      'Drift detected. Tighten the loop: one task, one step, go.',
+    ],
+    2: [
+      'You\'ve been off task a while. What\'s one thing you can finish in 5 minutes?',
+      'Focus up. Name the task and do the first step.',
+      'Set a timer for 10 minutes and start the hardest 30 seconds.',
+    ],
+    3: [
+      'You\'ve been off task instead of working. What\'s the smallest piece you can tackle?',
+      'Enough. Pick one step and start it in the next 10 seconds.',
+      'What are you avoiding — confusion, boredom, or fear of messing up?',
+    ],
+    4: [
+      'You\'re in a rough patch. Do a 60-second reset: stand up, drink water, breathe.',
+      'Stop the spiral. Pick the smallest possible action and do it slowly.',
+      'Crisis means simplify. One task. One step. Then reassess.',
+    ],
+  },
+  tough_love: {
+    1: [
+      'BRUH. You\'re off task. WHAT THE FUCK were you actually about to work on?',
+      'Quick reality check: is this the plan, or is your brain freelancing again?',
+      'That\'s not "research." That\'s procrastination with extra steps. What\'s next?',
+    ],
+    2: [
+      'Still off task? Cool. Pick ONE 5-minute step and do it. No more messing around.',
+      'CLOSE IT and open the work. What\'s the next tiny deliverable?',
+      'That dopamine snack isn\'t free — it costs your day. What\'s the fix?',
+    ],
+    3: [
+      'ENOUGH. What\'s the tiniest thing you can finish right now?',
+      'I\'m done being polite. Start the task — ugly, messy, whatever. Step one?',
+      'Your brain is lying to you. You can start badly. What\'s step one?',
+    ],
+    4: [
+      'Crisis mode. Stop torturing yourself. Stand up, water, breathe — then one micro-step.',
+      'Your brain is on fire. Lower the bar to "tiny" and do one micro-step right now.',
+      'No more punishment scrolling. Two minutes of real progress. What are you starting?',
+    ],
+  },
+};
+
 function getPreviewMessages(persona: Persona): { severity: Severity; text: string }[] {
-  const scripts = INTERVENTION_SCRIPTS[persona];
-  return ([1, 2, 3, 4] as Severity[]).map((sev) => ({
-    severity: sev,
-    text: stripEmotionTags(scripts[sev] ?? ''),
-  }));
+  const variants = PREVIEW_VARIANTS[persona];
+  return ([1, 2, 3, 4] as Severity[]).map((sev) => {
+    const pool = variants[sev as 1 | 2 | 3 | 4];
+    const text = pool[Math.floor(Math.random() * pool.length)];
+    return { severity: sev, text: stripEmotionTags(text) };
+  });
 }
 
 export function SettingsPage() {

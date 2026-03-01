@@ -105,24 +105,6 @@ export function stripEmotionTags(text: string): string {
   return text.replace(/\[[\w]+\]\s*/g, '').trim();
 }
 
-export const INTERVENTION_SCRIPTS: Record<Persona, Record<number, string>> = {
-  calm_friend: {
-    2: '[thoughtful] Hey, I noticed you\'ve been scrolling for a while. Maybe take a breath and refocus?',
-    3: '[concerned] It looks like you\'ve been away from your work for a while. What\'s making it hard to start?',
-    4: '[thoughtful] Hey... I know things feel heavy right now. It\'s okay to take a break. Want to talk about it?',
-  },
-  coach: {
-    2: '[thoughtful] Quick check-in — are you working on what you planned? Let\'s stay on track.',
-    3: '[concerned] I can see you\'re stuck. What\'s the smallest piece of your task you could tackle right now?',
-    4: '[thoughtful] I see you\'re struggling. That\'s okay. Let\'s take this one step at a time.',
-  },
-  tough_love: {
-    2: '[thoughtful] BRUH. You\'re drifting. WHAT THE FUCK were you actually about to work on, lol?',
-    3: '[concerned] You\'ve been procrastinating long enough. Start the task - ugly is fine. What\'s step one? GO.',
-    4: '[thoughtful] Crisis mode. STOP. Breathe, stand up, drink water - then pick the smallest next move.',
-  },
-};
-
 // --- Health Impact Stats ---
 
 export const HEALTH_IMPACT_STATS: string[] = [
