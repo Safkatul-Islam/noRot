@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { GlassCard } from '@/components/GlassCard';
 import { CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
@@ -16,6 +16,7 @@ import type { UserSettings } from '@/lib/electron-api';
 import { useAppStore } from '@/stores/app-store';
 import { useSettingsStore, ACCENT_PRESETS, ACCENT_IDS } from '@/stores/settings-store';
 import type { AccentColorId } from '@/stores/settings-store';
+import { useStartupFlowStore } from '@/stores/startup-flow-store';
 import { SEVERITY_BANDS, PERSONAS, INTERVENTION_SCRIPTS, stripEmotionTags } from '@norot/shared';
 import type { Severity, Persona } from '@norot/shared';
 import { cn } from '@/lib/utils';
@@ -92,12 +93,46 @@ export function SettingsPage() {
   const [visionEnabled, setVisionEnabled] = useState(true);
   const [savingVisionEnabled, setSavingVisionEnabled] = useState(false);
   const [scriptSource, setScriptSourceLocal] = useState<'default' | 'gemini'>('default');
-  const [autoShowTodoOverlay, setAutoShowTodoOverlay] = useState(false);
-  const [savingAutoShowTodo, setSavingAutoShowTodo] = useState(false);
+  const [autoShowTodoOverlay, setAutoShowTodoOverlay] = useState(true);
+  const [togglingOverlay, setTogglingOverlay] = useState(false);
+  const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('12h');
+  const [timeZone, setTimeZone] = useState('system');
+  const [timeZoneDraft, setTimeZoneDraft] = useState('system');
+  const [savingTimePrefs, setSavingTimePrefs] = useState(false);
+  const [supportedTimeZones, setSupportedTimeZones] = useState<string[]>([]);
 
   const statusLabels: Record<string, string> = {
     connected: 'Connected to API',
     disconnected: 'Disconnected',
+  };
+
+  const systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+  const persistTimeFormat = async (next: '12h' | '24h') => {
+    setTimeFormat(next);
+    setSavingTimePrefs(true);
+    try {
+      await getNorotAPI().updateSettings({ timeFormat: next });
+    } catch {
+      // ignore
+    } finally {
+      setSavingTimePrefs(false);
+    }
+  };
+
+  const persistTimeZone = async (next: string) => {
+    const trimmed = next.trim();
+    const value = trimmed ? trimmed : 'system';
+    setTimeZoneDraft(value);
+    setSavingTimePrefs(true);
+    try {
+      await getNorotAPI().updateSettings({ timeZone: value });
+      setTimeZone(value);
+    } catch {
+      // ignore
+    } finally {
+      setSavingTimePrefs(false);
+    }
   };
 
   useEffect(() => {
@@ -125,7 +160,16 @@ export function SettingsPage() {
         if (!cancelled) setScriptSourceLocal(settings?.scriptSource ?? 'default');
 
         if (!cancelled) setVisionEnabled(settings?.visionEnabled ?? true);
-        if (!cancelled) setAutoShowTodoOverlay(settings?.autoShowTodoOverlay ?? false);
+        if (!cancelled) setAutoShowTodoOverlay(settings?.autoShowTodoOverlay ?? true);
+
+        if (!cancelled) setTimeFormat(settings?.timeFormat ?? '12h');
+        const tz = typeof settings?.timeZone === 'string' && settings.timeZone.trim()
+          ? settings.timeZone.trim()
+          : 'system';
+        if (!cancelled) {
+          setTimeZone(tz);
+          setTimeZoneDraft(tz);
+        }
       })
       .catch(() => {
         // ignore
@@ -134,6 +178,18 @@ export function SettingsPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const intlAny = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+      const zones = typeof intlAny.supportedValuesOf === 'function'
+        ? intlAny.supportedValuesOf('timeZone')
+        : [];
+      if (Array.isArray(zones) && zones.length > 0) setSupportedTimeZones(zones);
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -285,7 +341,7 @@ export function SettingsPage() {
           const audio = await client.synthesize('Testing voice.', 'EXAVITQu4vr4xnSDxMaL', { model: 'eleven_v3', stability: 50, speed: 1.0 });
           await player.play(audio);
         } else {
-          await player.playUrl('/audio/calm_friend/severity-1.mp3');
+          await player.playUrl('audio/calm_friend/severity-1.mp3');
         }
       }
       setTestResult('success');
@@ -870,36 +926,129 @@ export function SettingsPage() {
                   ? 'border-success/30 text-success hover:bg-success/10'
                   : 'border-white/[0.06] text-text-secondary hover:text-text-primary',
               )}
-              disabled={savingAutoShowTodo}
+              disabled={togglingOverlay}
               onClick={async () => {
-                setSavingAutoShowTodo(true);
+                setTogglingOverlay(true);
                 try {
+                  const api = getNorotAPI();
                   const next = !autoShowTodoOverlay;
+                  await api.updateSettings({ autoShowTodoOverlay: next });
                   setAutoShowTodoOverlay(next);
-                  await getNorotAPI().updateSettings({ autoShowTodoOverlay: next });
+
+                  if (next) {
+                    await api.openTodoOverlay();
+                  } else {
+                    await api.closeTodoOverlay();
+                  }
                 } catch { /* ignore */ }
-                finally { setSavingAutoShowTodo(false); }
+                finally { setTogglingOverlay(false); }
               }}
             >
               <ListTodo className="size-4 mr-2" />
-              {savingAutoShowTodo ? '...' : autoShowTodoOverlay ? 'Auto-show todo overlay: On' : 'Auto-show todo overlay: Off'}
+              {togglingOverlay ? '...' : autoShowTodoOverlay ? 'Todo overlay: On' : 'Todo overlay: Off'}
             </Button>
+
+            <div className="rounded-lg border border-white/[0.06] bg-[var(--color-glass-well)] p-3">
+              <p className="text-[10px] text-text-muted uppercase tracking-wider">Time display</p>
+              <p className="text-xs text-text-secondary leading-relaxed mt-1">
+                Task times show in 12-hour (AM/PM) or 24-hour format, using your chosen time zone.
+              </p>
+
+              <div className="mt-2 flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={savingTimePrefs}
+                  className={cn(
+                    'flex-1',
+                    timeFormat === '12h'
+                      ? 'border-primary/30 text-primary hover:bg-primary/10'
+                      : 'border-white/[0.06] text-text-secondary hover:text-text-primary',
+                  )}
+                  onClick={() => persistTimeFormat('12h')}
+                >
+                  12-hour
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={savingTimePrefs}
+                  className={cn(
+                    'flex-1',
+                    timeFormat === '24h'
+                      ? 'border-primary/30 text-primary hover:bg-primary/10'
+                      : 'border-white/[0.06] text-text-secondary hover:text-text-primary',
+                  )}
+                  onClick={() => persistTimeFormat('24h')}
+                >
+                  24-hour
+                </Button>
+              </div>
+
+              <div className="mt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-text-muted uppercase tracking-wider">Time zone</span>
+                  <span className="text-[10px] text-text-secondary/70">System: {systemTimeZone}</span>
+                </div>
+                <input
+                  list="norot-timezones"
+                  value={timeZoneDraft === 'system' ? '' : timeZoneDraft}
+                  onChange={(e) => setTimeZoneDraft(e.target.value)}
+                  placeholder="(leave blank for system)"
+                  className={cn(
+                    'mt-2 w-full px-3 py-2 rounded-lg text-xs',
+                    'bg-[var(--color-glass-well)] border border-white/[0.06]',
+                    'text-text-primary placeholder:text-text-muted/60 focus:outline-none focus:border-primary/40',
+                  )}
+                />
+                {supportedTimeZones.length > 0 && (
+                  <datalist id="norot-timezones">
+                    {supportedTimeZones.map((z) => (
+                      <option key={z} value={z} />
+                    ))}
+                  </datalist>
+                )}
+
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={savingTimePrefs}
+                    className="flex-1 border-white/[0.06] text-text-secondary hover:text-text-primary"
+                    onClick={() => persistTimeZone('system')}
+                  >
+                    Use system
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={savingTimePrefs}
+                    className="flex-1 border-primary/30 text-primary hover:bg-primary/10"
+                    onClick={() => persistTimeZone(timeZoneDraft)}
+                  >
+                    {savingTimePrefs ? 'Saving...' : 'Save'}
+                  </Button>
+                </div>
+
+                <p className="mt-1 text-[11px] text-text-secondary/70">
+                  Current: {timeZone === 'system' ? systemTimeZone : timeZone}
+                </p>
+              </div>
+            </div>
+
             <Button
               variant="outline"
-              className="w-full border-warning/25 text-warning hover:bg-warning/10"
-              onClick={async () => {
-                try {
-                  const api = getNorotAPI();
-                  await api.updateSettings({ hasCompletedOnboarding: false });
-                  useSettingsStore.getState().setHasCompletedOnboarding(false);
-                } catch { /* ignore */ }
+              className="w-full border-white/[0.06] text-text-secondary hover:text-text-primary"
+              onClick={() => {
+                useAppStore.getState().setActivePage('dashboard');
+                useStartupFlowStore.getState().goToDailySetup();
               }}
             >
               <RotateCcw className="size-4 mr-2" />
-              Re-run onboarding
+              Re-run daily setup
             </Button>
             <p className="text-[10px] text-text-muted text-center">
-              Re-running onboarding lets you reconfigure your focus profile and todos.
+              Re-enter your tasks for today. Your settings, persona, and history are not affected.
             </p>
           </CardContent>
         </GlassCard>
