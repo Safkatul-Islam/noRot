@@ -30,14 +30,20 @@ export const VISION_LABELS: VisionLabel[] = [
   { label: 'checking work email', kind: 'email', category: 'productive' },
   { label: 'reading professional messages', kind: 'chat', category: 'productive' },
   { label: 'watching a tutorial video', kind: 'video', category: 'productive' },
+  { label: 'watching an educational lecture with slides', kind: 'video', category: 'productive' },
+  { label: 'watching a math lesson with equations', kind: 'video', category: 'productive' },
+  { label: 'watching a programming tutorial', kind: 'video', category: 'productive' },
 
   { label: 'chatting casually in a messaging app', kind: 'chat', category: 'social' },
   { label: 'scrolling a social media feed', kind: 'social_feed', category: 'social' },
 
   { label: 'watching an online video for entertainment', kind: 'video', category: 'entertainment' },
   { label: 'watching cartoons or anime', kind: 'video', category: 'entertainment' },
+  { label: 'watching an anime episode', kind: 'video', category: 'entertainment' },
   { label: 'watching a movie or TV show', kind: 'video', category: 'entertainment' },
   { label: 'looking at memes or funny content', kind: 'social_feed', category: 'entertainment' },
+  { label: 'watching sports highlights', kind: 'video', category: 'entertainment' },
+  { label: 'watching a music video', kind: 'video', category: 'entertainment' },
   { label: 'shopping online', kind: 'shopping', category: 'entertainment' },
   { label: 'playing a video game', kind: 'games', category: 'entertainment' },
 ];

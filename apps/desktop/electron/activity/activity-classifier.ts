@@ -61,54 +61,105 @@ function brandFromDomain(domain: string): string | null {
   return null;
 }
 
-function rulesBasedActivity(ctx: ActiveWindowContext): ActivityClassification | null {
+type RulesHint = { override: Partial<ActivityClassification>; lockCategory: boolean };
+
+function scoreTitleKeywords(title: string, keywords: string[]): number {
+  const t = title.toLowerCase();
+  let score = 0;
+  for (const k of keywords) {
+    const kk = k.toLowerCase();
+    if (!kk) continue;
+    if (t.includes(kk)) score++;
+  }
+  return score;
+}
+
+function rulesBasedActivity(ctx: ActiveWindowContext): RulesHint | null {
   const domain = ctx.windowUrl || ctx.windowTitle ? extractDomain(ctx.windowUrl, ctx.windowTitle) : undefined;
   if (domain) {
     const brand = brandFromDomain(domain);
     if (brand === 'Instagram') {
-      return { category: 'social', activityLabel: 'scrolling Instagram', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'social', activityLabel: 'scrolling Instagram', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'TikTok') {
-      return { category: 'entertainment', activityLabel: 'scrolling TikTok', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'scrolling TikTok', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'YouTube') {
-      return { category: 'entertainment', activityLabel: 'watching YouTube', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' };
+      const title = ctx.windowTitle ?? '';
+      const productiveHints = [
+        'math', 'calculus', 'algebra', 'geometry', 'linear algebra',
+        'statistics', 'probability',
+        'lecture', 'lesson', 'course', 'tutorial', 'how to', 'explained',
+        'homework', 'exam', 'problem', 'proof', 'derivation',
+        'physics', 'chemistry', 'biology', 'engineering',
+        'programming', 'coding', 'javascript', 'typescript', 'python', 'react', 'node',
+      ];
+      const entertainmentHints = [
+        'anime', 'episode', 'season', 'amv',
+        'trailer', 'movie', 'tv', 'cartoon',
+        'meme', 'funny', 'compilation', 'highlights',
+        'gameplay', 'gaming', 'stream', 'music video', 'lyrics',
+      ];
+      const p = scoreTitleKeywords(title, productiveHints);
+      const e = scoreTitleKeywords(title, entertainmentHints);
+
+      // Soft hint only: keep YouTube eligible for vision so it can override.
+      const hintedCategory =
+        p >= e + 2 ? 'productive' :
+        e >= p + 2 ? 'entertainment' :
+        'neutral';
+
+      const labelPrefix =
+        hintedCategory === 'productive' ? 'watching an educational YouTube video' :
+        hintedCategory === 'entertainment' ? 'watching YouTube for entertainment' :
+        'watching YouTube';
+
+      return {
+        override: {
+          ...(hintedCategory !== 'neutral' ? { category: hintedCategory } : {}),
+          activityLabel: labelPrefix,
+          activityKind: 'video',
+          activityConfidence: hintedCategory === 'neutral' ? 0.6 : 0.75,
+          activitySource: 'rules',
+        },
+        lockCategory: false,
+      };
     }
     if (brand === 'Reddit') {
-      return { category: 'entertainment', activityLabel: 'browsing Reddit', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'browsing Reddit', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'X') {
-      return { category: 'entertainment', activityLabel: 'browsing X', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'browsing X', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'GitHub') {
-      return { category: 'productive', activityLabel: 'coding on GitHub', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'coding on GitHub', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'Stack Overflow') {
-      return { category: 'productive', activityLabel: 'debugging on Stack Overflow', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'debugging on Stack Overflow', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'Google Docs') {
-      return { category: 'productive', activityLabel: 'working in Google Docs', activityKind: 'docs', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'working in Google Docs', activityKind: 'docs', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
   }
 
   const appName = ctx.appName.toLowerCase();
   if (appName.includes('code') || appName.includes('xcode') || appName.includes('intellij') || appName.includes('webstorm')) {
-    return { category: 'productive', activityLabel: 'coding', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'coding', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('excel') || appName.includes('numbers') || appName.includes('google sheets') || appName.includes('spreadsheet')) {
-    return { category: 'productive', activityLabel: 'working in a spreadsheet', activityKind: 'spreadsheets', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'working in a spreadsheet', activityKind: 'spreadsheets', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('powerpoint') || appName.includes('keynote') || appName.includes('slides')) {
-    return { category: 'productive', activityLabel: 'editing a presentation', activityKind: 'presentations', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'editing a presentation', activityKind: 'presentations', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('word') || appName.includes('pages') || appName.includes('notes') || appName.includes('notion')) {
-    return { category: 'productive', activityLabel: 'writing', activityKind: 'writing', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'writing', activityKind: 'writing', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('finder') || appName.includes('file explorer')) {
-    return { category: 'productive', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('system settings') || appName === 'settings') {
-    return { category: 'productive', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
 
   return null;
@@ -263,7 +314,10 @@ export function createActivityClassifier() {
 
       const rulesActivity = rulesBasedActivity(ctx);
       if (rulesActivity) {
-        return { ...base, ...rulesActivity };
+        const merged = { ...base, ...rulesActivity.override };
+        if (rulesActivity.lockCategory) return merged;
+        // Soft hint (e.g., YouTube): keep going so vision can decide.
+        Object.assign(base, merged);
       }
 
       if (!visionEnabled) return base;

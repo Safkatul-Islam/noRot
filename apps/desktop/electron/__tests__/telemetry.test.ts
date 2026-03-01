@@ -17,10 +17,15 @@ describe('classifyApp', () => {
   it('classifies known entertainment apps', () => {
     expect(classifyApp('Twitter', rules)).toBe('entertainment');
     expect(classifyApp('Reddit', rules)).toBe('entertainment');
-    expect(classifyApp('YouTube', rules)).toBe('entertainment');
     expect(classifyApp('TikTok', rules)).toBe('entertainment');
     // Instagram is treated as "social" (still unproductive in the UI).
     expect(classifyApp('Instagram', rules)).toBe('social');
+  });
+
+  it('classifies 50/50 apps as neutral', () => {
+    expect(classifyApp('YouTube', rules)).toBe('neutral');
+    expect(classifyApp('Google Chrome', rules)).toBe('neutral');
+    expect(classifyApp('Safari', rules)).toBe('neutral');
   });
 
   it('classifies known social apps', () => {

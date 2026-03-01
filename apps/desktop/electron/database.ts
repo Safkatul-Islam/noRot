@@ -115,6 +115,26 @@ export function initDatabase(): void {
         return true;
       });
 
+      // Targeted migration: update a few seed rules whose defaults changed (without touching user-created rules).
+      // YouTube is treated as 50/50 and should be neutral by default so vision can decide tutorial vs entertainment.
+      const defaultByKey = new Map(
+        DEFAULT_CATEGORY_RULES.map((r) => [`${r.matchType}:${r.pattern.trim().toLowerCase()}`, r.category] as const)
+      );
+      const forceToDefaultKeys = new Set([
+        'app:youtube',
+        'title:youtube.com',
+        'title:youtu.be',
+      ]);
+      for (const r of savedRules) {
+        const key = `${r.matchType}:${r.pattern.trim().toLowerCase()}`;
+        if (!forceToDefaultKeys.has(key)) continue;
+        if (typeof r.id !== 'string' || !r.id.startsWith('seed-')) continue;
+        const next = defaultByKey.get(key);
+        if (next && r.category !== next) {
+          r.category = next;
+        }
+      }
+
       const existingKeys = new Set(
         savedRules
           .filter((r) => r && typeof r.matchType === 'string' && typeof r.pattern === 'string')
