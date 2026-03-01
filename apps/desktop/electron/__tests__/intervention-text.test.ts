@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { buildInterventionText } from '../intervention-text';
+import { buildInterventionText, buildZeroFocusInterventionText } from '../intervention-text';
 
 describe('buildInterventionText', () => {
   beforeEach(() => {
@@ -54,5 +54,25 @@ describe('buildInterventionText', () => {
     expect(text).toMatch(/WHAT THE FUCK/);
     expect(text).toMatch(/[A-Z]{3,}/);
     expect(text.toLowerCase()).toMatch(/\b(fuck|bitch|bastard|idiot|dumbass|stupid ass)\b/);
+  });
+
+  it('zero-focus message is long and action-oriented', () => {
+    const text = buildZeroFocusInterventionText('coach', {
+      activeApp: 'Google Chrome',
+      activeCategory: 'social',
+      activeDomain: 'instagram.com',
+      activityLabel: undefined,
+      activityKind: undefined,
+      activityConfidence: undefined,
+      activitySource: undefined,
+    }, {
+      overdueTodos: [{ text: 'Write proposal', deadline: '14:00' }],
+      activeTodos: ['Write proposal', 'Send invoice'],
+    });
+    expect(text).toMatch(/ZERO/i);
+    expect(text.toLowerCase()).toContain('instagram');
+    expect(text.toLowerCase()).toContain('close');
+    expect(text.toLowerCase()).toContain('open');
+    expect(text.toLowerCase()).toContain('two minutes');
   });
 });

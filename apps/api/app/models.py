@@ -2,7 +2,9 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FocusIntent(BaseModel):
@@ -15,14 +17,24 @@ class FocusIntent(BaseModel):
 class UsageSignals(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    session_minutes: float = Field(alias="sessionMinutes")
-    distracting_minutes: float = Field(alias="distractingMinutes")
-    productive_minutes: float = Field(alias="productiveMinutes")
-    app_switches_last_5_min: int = Field(alias="appSwitchesLast5Min")
-    idle_seconds_last_5_min: float = Field(alias="idleSecondsLast5Min")
+    session_minutes: float = Field(alias="sessionMinutes", ge=0)
+    distracting_minutes: float = Field(alias="distractingMinutes", ge=0)
+    productive_minutes: float = Field(alias="productiveMinutes", ge=0)
+    app_switches_last_5_min: int = Field(alias="appSwitchesLast5Min", ge=0)
+    idle_seconds_last_5_min: float = Field(alias="idleSecondsLast5Min", ge=0)
     time_of_day_local: str = Field(alias="timeOfDayLocal", max_length=10)  # "HH:MM"
-    snoozes_last_60_min: int = Field(alias="snoozesLast60Min")
-    recent_distract_ratio: Optional[float] = Field(default=None, alias="recentDistractRatio")
+    snoozes_last_60_min: int = Field(alias="snoozesLast60Min", ge=0)
+
+    @field_validator("time_of_day_local")
+    @classmethod
+    def validate_time_format(cls, v: str) -> str:
+        if not re.match(r"^\d{1,2}:\d{2}$", v):
+            raise ValueError("timeOfDayLocal must be in HH:MM format")
+        hh, mm = v.split(":")
+        if int(hh) > 23 or int(mm) > 59:
+            raise ValueError("timeOfDayLocal has invalid hour or minute values")
+        return v
+    recent_distract_ratio: Optional[float] = Field(default=None, alias="recentDistractRatio", ge=0.0, le=1.0)
     focus_score: Optional[float] = Field(default=None, alias="focusScore", ge=0.0, le=100.0)
 
 
