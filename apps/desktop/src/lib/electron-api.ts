@@ -57,11 +57,21 @@ export interface NoRotAPI {
     eventId: string,
     response: 'snoozed' | 'dismissed' | 'working'
   ): Promise<void>;
+  getActiveIntervention(): Promise<InterventionEvent | null>;
   onIntervention(callback: (event: InterventionEvent) => void): () => void;
   onInterventionDismiss(callback: (data: { interventionId: string }) => void): () => void;
+  onInterventionResponse(callback: (data: { interventionId: string; response: 'snoozed' | 'dismissed' | 'working' }) => void): () => void;
+
+  // Snooze (cross-window)
+  getSnoozeState(): Promise<{ snoozedUntil: number | null }>;
+  setSnooze(durationMs: number): Promise<void>;
+  cancelSnooze(): Promise<void>;
+  onSnoozeUpdated(callback: (data: { snoozedUntil: number | null }) => void): () => void;
+
   testIntervention(): Promise<InterventionEvent>;
   getUsageHistory(): Promise<UsageHistoryPoint[]>;
   getAppStats(minutes?: number): Promise<AppStats[]>;
+  getInstalledApps(): Promise<string[]>;
   getWins(): Promise<WinsData>;
   getSettings(): Promise<UserSettings>;
   updateSettings(settings: Partial<UserSettings>): Promise<void>;

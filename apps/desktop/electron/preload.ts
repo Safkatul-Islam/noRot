@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld('norot', {
     );
   },
 
+  getActiveIntervention: (): Promise<unknown> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_ACTIVE_INTERVENTION);
+  },
+
   onIntervention: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: unknown) => {
       callback(data);
@@ -75,6 +79,39 @@ contextBridge.exposeInMainWorld('norot', {
     ipcRenderer.on(IPC_CHANNELS.ON_INTERVENTION_DISMISS, handler);
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.ON_INTERVENTION_DISMISS, handler);
+    };
+  },
+
+  onInterventionResponse: (callback: (data: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) => {
+      callback(data);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_INTERVENTION_RESPONSE, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_INTERVENTION_RESPONSE, handler);
+    };
+  },
+
+  // --- Snooze (cross-window) ---
+  getSnoozeState: (): Promise<unknown> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_SNOOZE_STATE);
+  },
+
+  setSnooze: (durationMs: number): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.SET_SNOOZE, durationMs);
+  },
+
+  cancelSnooze: (): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.CANCEL_SNOOZE);
+  },
+
+  onSnoozeUpdated: (callback: (data: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) => {
+      callback(data);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_SNOOZE_UPDATED, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_SNOOZE_UPDATED, handler);
     };
   },
 
@@ -113,6 +150,10 @@ contextBridge.exposeInMainWorld('norot', {
 
   getAppStats: (minutes?: number): Promise<unknown[]> => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_APP_STATS, minutes);
+  },
+
+  getInstalledApps: (): Promise<string[]> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_INSTALLED_APPS);
   },
 
   // --- Wins ---

@@ -33,6 +33,14 @@ let mockSettings: Record<string, unknown> = {
   monitoringEnabled: true,
 };
 
+let mockSnoozedUntil: number | null = null;
+let snoozeListeners: Array<(data: { snoozedUntil: number | null }) => void> = [];
+let snoozeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function broadcastSnooze() {
+  for (const cb of snoozeListeners) cb({ snoozedUntil: mockSnoozedUntil });
+}
+
 function broadcastTodos() {
   for (const cb of todoListeners) cb([...mockTodos]);
 }
@@ -53,8 +61,44 @@ export const mockNorotAPI: NoRotAPI = {
   onScoreUpdate: () => () => {},
   onLiveScoreUpdate: () => () => {},
   respondToIntervention: async () => {},
+  getActiveIntervention: async () => null,
   onIntervention: () => () => {},
   onInterventionDismiss: () => () => {},
+  onInterventionResponse: () => () => {},
+
+  getSnoozeState: async () => ({ snoozedUntil: mockSnoozedUntil }),
+  setSnooze: async (durationMs: number) => {
+    const ms = Math.max(0, Math.floor(durationMs));
+    if (ms === 0) {
+      mockSnoozedUntil = null;
+      if (snoozeTimer) clearTimeout(snoozeTimer);
+      snoozeTimer = null;
+      broadcastSnooze();
+      return;
+    }
+
+    mockSnoozedUntil = Date.now() + ms;
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = setTimeout(() => {
+      snoozeTimer = null;
+      mockSnoozedUntil = null;
+      broadcastSnooze();
+    }, ms);
+    broadcastSnooze();
+  },
+  cancelSnooze: async () => {
+    mockSnoozedUntil = null;
+    if (snoozeTimer) clearTimeout(snoozeTimer);
+    snoozeTimer = null;
+    broadcastSnooze();
+  },
+  onSnoozeUpdated: (callback: (data: { snoozedUntil: number | null }) => void) => {
+    snoozeListeners.push(callback);
+    return () => {
+      snoozeListeners = snoozeListeners.filter((cb) => cb !== callback);
+    };
+  },
+
   testIntervention: async () => ({
     id: 'mock-test',
     timestamp: new Date().toISOString(),
@@ -71,6 +115,17 @@ export const mockNorotAPI: NoRotAPI = {
     { appName: 'Chrome', category: 'neutral', totalSeconds: 5400, lastSeen: new Date().toISOString() },
     { appName: 'Terminal', category: 'productive', totalSeconds: 3600, lastSeen: new Date().toISOString() },
     { appName: 'Slack', category: 'social', totalSeconds: 1800, lastSeen: new Date().toISOString() },
+    { appName: 'YouTube', domain: 'youtube.com', category: 'entertainment', totalSeconds: 4200, lastSeen: new Date().toISOString() },
+    { appName: 'Netflix', category: 'entertainment', totalSeconds: 2100, lastSeen: new Date().toISOString() },
+    { appName: 'Discord', category: 'social', totalSeconds: 1200, lastSeen: new Date().toISOString() },
+    { appName: 'Twitter', domain: 'x.com', category: 'social', totalSeconds: 900, lastSeen: new Date().toISOString() },
+    { appName: 'Notion', category: 'productive', totalSeconds: 1500, lastSeen: new Date().toISOString() },
+    { appName: 'A Very Long Application Name For Testing', category: 'neutral', totalSeconds: 60, lastSeen: new Date().toISOString() },
+  ],
+  getInstalledApps: async () => [
+    'Google Chrome', 'VS Code', 'Terminal', 'Slack', 'Discord',
+    'Spotify', 'Notion', 'Figma', 'Safari', 'Messages',
+    'Calendar', 'Notes', 'Preview',
   ],
   getWins: async () => ({ refocusCount: 3, totalFocusedMinutes: 47 }),
   getSettings: async () => ({ ...mockSettings } as any),

@@ -8,8 +8,10 @@ import type { InterventionEvent, Severity, ChatMessage, TodoItem, TTSSettings, U
 import { generateScript, streamChat, extractTodosWithApps } from './gemini-client';
 import { buildInterventionText } from './intervention-text';
 import { clearContextCache } from './context-checker';
-import { getMainWindow, getTodoWindow, setTodoWindow, createTodoOverlayWindow } from './window-manager';
+import { closeInterventionOverlayWindow, getMainWindow, getTodoWindow, setTodoWindow, createTodoOverlayWindow, showInterventionOverlayWindow } from './window-manager';
 import { ensureAgent, ensureCheckinAgent } from './elevenlabs-agent';
+import { cancelSnooze, getSnoozedUntil, onSnoozeUpdated, setSnooze } from './snooze-state';
+import { getActiveIntervention, clearActiveIntervention, setActiveIntervention } from './intervention-state';
 
 let lastScreenProbeAt = 0;
 let lastScreenProbeOk = false;
@@ -17,6 +19,18 @@ const MAX_CHAT_SESSIONS = 10;
 const MAX_MESSAGES_PER_SESSION = 100;
 const chatSessions = new Map<string, ChatMessage[]>();
 const chatAbortControllers = new Map<string, AbortController>();
+
+function broadcastSnoozeState(): void {
+  const snoozedUntil = getSnoozedUntil();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.send(IPC_CHANNELS.ON_SNOOZE_UPDATED, { snoozedUntil });
+  }
+}
+
+onSnoozeUpdated(() => {
+  broadcastSnoozeState();
+});
 
 async function canReadActiveWindow(): Promise<boolean> {
   try {
@@ -104,9 +118,36 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     IPC_CHANNELS.RESPOND_TO_INTERVENTION,
     (_event, eventId: string, response: 'snoozed' | 'dismissed' | 'working') => {
+      // handleInterventionResponse is safe against double-close: if auto-dismiss
+      // already cleared activeInterventionId, the state guard inside skips mutation.
+      // The user's explicit response always wins (overwrites auto-dismiss DB value).
       orchestrator.handleInterventionResponse(eventId, response);
+      clearActiveIntervention(eventId);
+      closeInterventionOverlayWindow(); // idempotent — no-op if already closed
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.webContents.send(IPC_CHANNELS.ON_INTERVENTION_RESPONSE, { interventionId: eventId, response });
+      }
     }
   );
+
+  ipcMain.handle(IPC_CHANNELS.GET_ACTIVE_INTERVENTION, () => {
+    return getActiveIntervention();
+  });
+
+  // --- Snooze (cross-window) ---
+
+  ipcMain.handle(IPC_CHANNELS.GET_SNOOZE_STATE, () => {
+    return { snoozedUntil: getSnoozedUntil() };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SET_SNOOZE, (_event, durationMs: number) => {
+    setSnooze(durationMs);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CANCEL_SNOOZE, () => {
+    cancelSnooze();
+  });
 
   // --- Audio Played ---
 
@@ -127,6 +168,22 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.GET_APP_STATS, (_event, minutes?: number) => {
     return database.getAppStats(minutes);
+  });
+
+  // --- Installed Apps (macOS /Applications scan) ---
+
+  ipcMain.handle(IPC_CHANNELS.GET_INSTALLED_APPS, async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    try {
+      const entries = fs.readdirSync('/Applications');
+      return entries
+        .filter((e) => e.endsWith('.app'))
+        .map((e) => e.replace(/\.app$/, ''))
+        .sort();
+    } catch {
+      return [];
+    }
   });
 
   // --- Wins ---
@@ -212,6 +269,8 @@ export function registerIpcHandlers(): void {
       audioPlayed: false,
     };
     database.insertIntervention(intervention);
+    setActiveIntervention(intervention);
+    showInterventionOverlayWindow(intervention);
     const mainWindow = getMainWindow();
     if (!mainWindow || mainWindow.isDestroyed()) return intervention;
     mainWindow.webContents.send(IPC_CHANNELS.ON_INTERVENTION, intervention);
