@@ -15,11 +15,18 @@ export interface FocusScoreTickInput {
   activeCategory: UsageCategories['activeCategory'];
   appSwitchesLast5Min: UsageSignals['appSwitchesLast5Min'];
   elapsedMs: number;
+  /**
+   * Multiplier for distracting decay rate.
+   * - 1.0 = normal behavior (3–6 pts/sec decay)
+   * - 0.0 = no decay while distracting
+   * - 0.5 = half-rate decay (≈1.5–3 pts/sec)
+   */
+  decayScale?: number;
 }
 
 export interface FocusScoreTickResult {
   focusScore: number; // rounded, 0-100
-  decayPerSec: number; // 3-6
+  decayPerSec: number; // applied decay rate (scaled)
   recoveryPerSec: number;
 }
 
@@ -51,7 +58,10 @@ export class FocusScoreEngine {
 
     const switchesPerMin = (input.appSwitchesLast5Min ?? 0) / 5;
     const normSwitchRate = normalizeSwitchRate(switchesPerMin);
-    const decayPerSec = clamp(3 + 3 * normSwitchRate, 3, 6);
+    const baseDecayPerSec = clamp(3 + 3 * normSwitchRate, 3, 6);
+    const decayScaleRaw = typeof input.decayScale === 'number' && Number.isFinite(input.decayScale) ? input.decayScale : 1;
+    const decayScale = clamp(decayScaleRaw, 0, 10);
+    const decayPerSec = baseDecayPerSec * decayScale;
 
     const isDistractingNow =
       input.activeCategory === 'social' || input.activeCategory === 'entertainment';
@@ -71,4 +81,3 @@ export class FocusScoreEngine {
     };
   }
 }
-

@@ -237,3 +237,80 @@ export function buildInterventionText(
 
   return text;
 }
+
+export function buildZeroFocusInterventionText(
+  persona: Persona,
+  categories: UsageCategories,
+  opts?: {
+    activeTodos?: string[];
+    overdueTodos?: Array<{ text: string; deadline: string }>;
+  }
+): string {
+  const target = getTarget(categories) ?? 'doing something that is not your work';
+  const overdue = opts?.overdueTodos?.slice(0, 3) ?? [];
+  const todos = (opts?.activeTodos ?? []).filter(Boolean).slice(0, 5);
+
+  const todoLines: string[] = [];
+  if (overdue.length > 0) {
+    todoLines.push('You are already behind on:');
+    for (const t of overdue) {
+      todoLines.push(`- "${t.text}" (was due at ${t.deadline})`);
+    }
+  } else if (todos.length > 0) {
+    todoLines.push('Your task list exists for a reason. Here are the next things you said you would do:');
+    for (const t of todos) {
+      todoLines.push(`- "${t}"`);
+    }
+  } else {
+    todoLines.push('You don\'t even need a perfect plan right now \u2014 you need one real action.');
+  }
+
+  const common = [
+    `Your focus score just hit ZERO.`,
+    `Right now you are ${target}.`,
+    ``,
+    `Here's what that means: you're letting a tiny dopamine loop decide your day.`,
+    `And if you keep letting it drive, the cost is not "5 more minutes" \u2014 it's your entire afternoon.`,
+    ``,
+    ...todoLines,
+    ``,
+    `Do this, immediately:`,
+    `1) Close the distracting thing.`,
+    `2) Open the one file/tab that matters.`,
+    `3) Do the smallest possible next step for 120 seconds.`,
+    ``,
+    `Starting badly is still starting. Start now.`,
+  ].join('\n');
+
+  if (persona === 'tough_love') {
+    return [
+      `STOP.`,
+      `This is not "a break." This is you bleeding time.`,
+      ``,
+      common,
+      ``,
+      `I'm disappointed because you're capable of more than this.`,
+      `Prove it. Two minutes. Go.`,
+    ].join('\n');
+  }
+
+  if (persona === 'coach') {
+    return [
+      `Focus: 0.`,
+      `That's a hard stop.`,
+      ``,
+      common,
+      ``,
+      `You're not stuck. You're just uncommitted to the next action.`,
+      `Commit. Execute. Two minutes.`,
+    ].join('\n');
+  }
+
+  return [
+    `Hey \u2014 I'm not judging you. But this is the moment you need to interrupt.`,
+    ``,
+    common,
+    ``,
+    `I'm on your side. Let's get you back into motion.`,
+  ].join('\n');
+}
