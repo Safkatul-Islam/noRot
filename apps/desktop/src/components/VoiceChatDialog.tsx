@@ -44,7 +44,12 @@ export function VoiceChatDialog() {
 
   // Extraction runs inside the dialog (needs transcript + status).
   // The ProposedTasksPanel is rendered separately in App.tsx (outside motion wrappers).
-  useTranscriptTodoExtraction(transcript, status);
+  useTranscriptTodoExtraction(transcript, status, {
+    getProposedTodos: () => useVoiceChatStore.getState().proposedTodos,
+    setProposedTodos: (todos) => useVoiceChatStore.getState().setProposedTodos(todos),
+    setIsExtracting: (v) => useVoiceChatStore.getState().setIsExtracting(v),
+    setMissingGeminiKey: (v) => useVoiceChatStore.getState().setMissingGeminiKey(v),
+  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasStartedRef = useRef(false);
@@ -118,13 +123,11 @@ export function VoiceChatDialog() {
 
   const handleSaveAndClose = async () => {
     const { proposedTodos } = useVoiceChatStore.getState();
-    const allHaveTimes = proposedTodos.length > 0 && proposedTodos.every(
-      (t) => typeof t.deadline === 'string' && t.deadline,
-    );
-    if (!allHaveTimes) return;
     try {
-      await getNorotAPI().appendTodos(proposedTodos);
-      clearProposedTodos();
+      if (proposedTodos.length > 0) {
+        await getNorotAPI().appendTodos(proposedTodos);
+        clearProposedTodos();
+      }
     } catch (err) {
       console.error('[voice-chat] Failed to save tasks:', err);
     }
