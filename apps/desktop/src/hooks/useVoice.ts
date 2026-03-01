@@ -1,92 +1,160 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { toast } from 'sonner';
+import type { ScoreResponse } from '@norot/shared';
+import { getNorotAPI } from '@/lib/norot-api';
+import { useAppStore } from '@/stores/app-store';
+import { useSettingsStore } from '@/stores/settings-store';
+import { useVoiceStatusStore } from '@/stores/voice-status-store';
+import { useScoreStore } from '@/stores/score-store';
+import { useSnoozeStore } from '@/stores/snooze-store';
+import { VoiceService } from '../services/voice/voice-service';
 
-import type { PersonaId, Severity, TTSSettings } from '@norot/shared'
-
-import { IPC_CHANNELS } from '../ipc-channels'
-import { VoiceService } from '../lib/voice-service'
-
-export interface VoiceStatusBroadcast {
-  speaking: boolean
-  amplitude: number
-  source: string
-}
-
-export function useVoice(options: {
-  muted: boolean
-  ttsEngine: 'auto' | 'elevenlabs' | 'local'
-  hasElevenLabsKey: boolean
-  onToast?: (message: string) => void
-}) {
-  const { muted, ttsEngine, hasElevenLabsKey, onToast } = options
-  const [status, setStatus] = useState(() => ({ speaking: false, amplitude: 0, source: 'none', error: null as string | null }))
-
-  const onStartRef = useRef<(id: string) => void>(() => {})
-  onStartRef.current = (id: string) => {
-    void window.norot.invoke(IPC_CHANNELS.interventions.reportAudioPlayed, { id })
-  }
-
-  const voice = useMemo(() => new VoiceService((id) => onStartRef.current(id)), [])
+export function useVoice() {
+  const serviceRef = useRef<VoiceService | null>(null);
+  const shownToastRef = useRef(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const settingsMuted = useSettingsStore((s) => s.muted);
+  const ttsEngine = useSettingsStore((s) => s.ttsEngine);
+  const snoozedUntil = useSnoozeStore((s) => s.snoozedUntil);
+  const snoozeActive = typeof snoozedUntil === 'number' && snoozedUntil > Date.now();
+  const muted = settingsMuted || snoozeActive;
 
   useEffect(() => {
-    const unlock = () => voice.unlock()
-    window.addEventListener('pointerdown', unlock, { once: true })
+    const voice = new VoiceService();
+    serviceRef.current = voice;
+    voice.setTtsEngine(ttsEngine);
+
+    // Expose analyser getter to store so VoiceOrb can read it
+    useVoiceStatusStore.getState().setAnalyserGetter(() => voice.getAnalyser());
+
+    // Poll unified isSpeaking (AudioPlayer + LocalTTS)
+    let prevSpeaking: boolean | null = null;
+    let prevSeverity: number | null = null;
+    let lastBroadcastAt = 0;
+    const interval = setInterval(() => {
+      const speaking = voice.isSpeaking();
+      setIsPlaying(speaking);
+      useVoiceStatusStore.getState().setIsSpeaking(speaking);
+
+      // Compute amplitude from analyser (normalized 0-1)
+      const analyser = voice.getAnalyser();
+      let amplitude = 0;
+      // Only sample amplitude while actively speaking to avoid idle noise pulsing.
+      if (speaking && analyser) {
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        amplitude = sum / data.length / 255;
+      }
+      useVoiceStatusStore.getState().setAmplitude(amplitude);
+
+      // Broadcast voice status to overlay window:
+      // - always while speaking (for smooth amplitude)
+      // - whenever severity changes (orb color must match tray)
+      // - plus a slow heartbeat so a newly-created overlay window syncs state
+      const severity = useScoreStore.getState().currentSeverity;
+      const now = Date.now();
+      const heartbeat = !speaking && now - lastBroadcastAt > 1000;
+      const shouldBroadcast =
+        prevSpeaking === null ||
+        prevSeverity === null ||
+        speaking !== prevSpeaking ||
+        severity !== prevSeverity ||
+        speaking ||
+        heartbeat;
+
+      if (shouldBroadcast) {
+        window.norot?.broadcastVoiceStatus?.(speaking, severity, amplitude);
+        lastBroadcastAt = now;
+      }
+
+      prevSpeaking = speaking;
+      prevSeverity = severity;
+    }, 200);
+
+    const api = getNorotAPI();
+    const unsubscribe = api.onPlayAudio(async (data: ScoreResponse) => {
+      const result = await voice.speak(data);
+      console.log('[voice] speak result: source=%s severity=%s error=%s errorCode=%s',
+        result.source, data.severity, result.error ?? 'none', result.errorCode ?? 'none');
+
+      // Report audio playback to main process
+      const interventionId = (data as ScoreResponse & { interventionId?: string }).interventionId;
+      if (interventionId) {
+        try {
+          await api.reportAudioPlayed(interventionId);
+        } catch {
+          // not critical
+        }
+      }
+
+      // Update voice status store
+      if (result.source === 'elevenlabs') {
+        useVoiceStatusStore.getState().setVoiceSource('elevenlabs');
+      } else if (result.source === 'fallback') {
+        useVoiceStatusStore.getState().setVoiceSource('fallback');
+      } else if (result.source === 'local') {
+        useVoiceStatusStore.getState().setVoiceSource('fallback');
+      } else if (result.source === 'none' && result.error) {
+        useVoiceStatusStore.getState().setVoiceSource('error');
+      }
+
+      if (result.source === 'fallback' && !shownToastRef.current) {
+        if (result.errorCode === 401 || result.errorCode === 403) {
+          toast.warning('ElevenLabs key is invalid — check Settings.');
+        } else {
+          toast.info('Using local voice. For natural AI voice, add your ElevenLabs key in Settings.', {
+            action: {
+              label: 'Settings',
+              onClick: () => useAppStore.getState().setActivePage('settings'),
+            },
+          });
+        }
+        shownToastRef.current = true;
+      }
+
+      if (result.source === 'none' && result.error && !shownToastRef.current) {
+        toast.error('Voice playback failed. Check your audio settings.');
+        shownToastRef.current = true;
+      }
+    });
+
     return () => {
-      window.removeEventListener('pointerdown', unlock)
-    }
-  }, [voice])
+      clearInterval(interval);
+      if (typeof unsubscribe === 'function') unsubscribe();
+      voice.stop();
+      voice.getPlayer().dispose();
+      serviceRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
-    const off = window.norot.on(IPC_CHANNELS.interventions.onPlayAudio, (payload) => {
-      const evt = parsePlayAudio(payload)
-      if (!evt) return
-
-      const canUseEleven = hasElevenLabsKey && (ttsEngine === 'auto' || ttsEngine === 'elevenlabs')
-      if (muted) {
-        onToast?.('Muted')
-        return
-      }
-      if (!canUseEleven) {
-        onToast?.('Voice disabled (missing ElevenLabs config)')
-        return
-      }
-
-      if (evt.severity >= 3) voice.interruptAndEnqueue(evt)
-      else voice.enqueue(evt)
-    })
-    return () => off()
-  }, [hasElevenLabsKey, muted, onToast, ttsEngine, voice])
+    const voice = serviceRef.current;
+    if (!voice) return;
+    if (muted) voice.mute();
+    else voice.unmute();
+  }, [muted]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      const next = voice.getStatus()
-      setStatus(next)
-      const broadcast: VoiceStatusBroadcast = { speaking: next.speaking, amplitude: next.amplitude, source: next.source }
-      window.norot.send(IPC_CHANNELS.voice.statusBroadcast, broadcast)
-    }, 200)
-    return () => window.clearInterval(timer)
-  }, [voice])
+    serviceRef.current?.setTtsEngine(ttsEngine);
+  }, [ttsEngine]);
 
-  return { voiceStatus: status }
+  const mute = useCallback(() => {
+    serviceRef.current?.mute();
+  }, []);
+
+  const unmute = useCallback(() => {
+    serviceRef.current?.unmute();
+  }, []);
+
+  const stop = useCallback(() => {
+    serviceRef.current?.stop();
+  }, []);
+
+  const getAnalyser = useCallback((): AnalyserNode | null => {
+    return serviceRef.current?.getAnalyser() ?? null;
+  }, []);
+
+  return { mute, unmute, stop, isMuted: muted, isPlaying, getAnalyser };
 }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function parsePlayAudio(payload: unknown): { id: string; text: string; persona: PersonaId; severity: Severity; tts: TTSSettings } | null {
-  if (!isRecord(payload)) return null
-  const id = payload.id
-  const text = payload.text
-  const persona = payload.persona
-  const severity = payload.severity
-  const tts = payload.tts
-
-  if (typeof id !== 'string' || id.length === 0) return null
-  if (typeof text !== 'string' || text.trim().length === 0) return null
-  if (persona !== 'calm_friend' && persona !== 'coach' && persona !== 'tough_love') return null
-  if (severity !== 0 && severity !== 1 && severity !== 2 && severity !== 3 && severity !== 4) return null
-  if (!isRecord(tts)) return null
-
-  return payload as { id: string; text: string; persona: PersonaId; severity: Severity; tts: TTSSettings }
-}
-

@@ -1,349 +1,338 @@
-import { BrowserWindow, ipcMain } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { app, ipcMain, BrowserWindow, systemPreferences, shell } from 'electron';
+import { randomUUID } from 'crypto';
+import path from 'path';
+import { IPC_CHANNELS } from './types';
+import * as database from './database';
+import * as orchestrator from './orchestrator';
+import * as apiClient from './api-client';
+import type { InterventionEvent, Severity, ChatMessage, TodoItem } from '@norot/shared';
+import { INTERVENTION_SCRIPTS, stripEmotionTags } from '@norot/shared';
+import { generateScript, streamChat, extractTodos } from './gemini-client';
+import { getMainWindow, getTodoWindow, setTodoWindow, createTodoOverlayWindow } from './window-manager';
 
-import type { PersonaId, TTSSettings } from '@norot/shared'
-import { PERSONAS } from '@norot/shared'
+let lastScreenProbeAt = 0;
+let lastScreenProbeOk = false;
+const MAX_CHAT_SESSIONS = 10;
+const MAX_MESSAGES_PER_SESSION = 100;
+const chatSessions = new Map<string, ChatMessage[]>();
+const chatAbortControllers = new Map<string, AbortController>();
 
-import { IPC_CHANNELS } from './types'
-import { LocalDatabase } from './database'
-import type { TelemetryService } from './telemetry'
-import type { Orchestrator } from './orchestrator'
-import type { TodoOverlayManager } from './todo-overlay'
-import { getPermissionsStatus, requestPermissions } from './permissions'
-import { clearGeminiCache, extractTodosWithGemini, streamGeminiChat } from './gemini'
-import { getElevenLabsConversationToken, getElevenLabsSignedUrl, synthesizeElevenLabsTts } from './elevenlabs'
+async function canReadActiveWindow(): Promise<boolean> {
+  try {
+    const mod = await import('get-windows');
+    const win = await mod.activeWindow();
+    return Boolean(win?.owner?.name);
+  } catch {
+    return false;
+  }
+}
 
-let didRegister = false
+export function registerIpcHandlers(): void {
+  // --- App ---
 
-export function registerIpcHandlers(options: {
-  mainWindow: BrowserWindow
-  db: LocalDatabase
-  telemetry: TelemetryService
-  orchestrator: Orchestrator
-  todoOverlay: TodoOverlayManager
-}): void {
-  if (didRegister) return
-  didRegister = true
+  ipcMain.handle(IPC_CHANNELS.RELAUNCH_APP, (_event, rendererUrl?: string) => {
+    const nextArgs = process.argv.slice(1);
 
-  const { mainWindow, db, orchestrator, todoOverlay } = options
-
-  ipcMain.handle(IPC_CHANNELS.telemetry.start, () => {
-    orchestrator.startTelemetry()
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.telemetry.stop, () => {
-    orchestrator.stopTelemetry()
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.telemetry.isActive, () => ({ active: orchestrator.isTelemetryActive() }))
-
-  ipcMain.handle(IPC_CHANNELS.settings.get, () => {
-    return db.getAllSettings()
-  })
-
-  ipcMain.handle(IPC_CHANNELS.settings.update, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') return { ok: false }
-    const updates = payload as Record<string, unknown>
-    const existingKeys = new Set(Object.keys(db.getAllSettings()))
-
-    const beforeGeminiKey = db.getSetting<string>('geminiKey')
-    const beforeElevenLabsKey = db.getSetting<string>('elevenLabsApiKey')
-
-    const requestedPersona = updates.persona
-    const requestedToughLoveEnabled = updates.toughLoveEnabled
-    const currentToughLoveEnabled = db.getSetting<boolean>('toughLoveEnabled')
-    if (
-      requestedPersona === 'tough_love'
-      && requestedToughLoveEnabled !== true
-      && currentToughLoveEnabled !== true
-    ) {
-      return { ok: false, error: { code: 'tough_love_disabled', message: 'Enable tough love explicitly before selecting it.' } }
+    if (typeof rendererUrl === 'string' && rendererUrl.startsWith('http')) {
+      const hasRendererUrlArg = nextArgs.some((a) => a.startsWith('--renderer-url='));
+      if (!hasRendererUrlArg) nextArgs.push(`--renderer-url=${rendererUrl}`);
     }
 
-    for (const [key, value] of Object.entries(updates)) {
-      if (!existingKeys.has(key)) continue
-      db.setSetting(key as never, value as never)
+    app.relaunch({ args: nextArgs });
+    app.exit(0);
+  });
+
+  // --- Telemetry ---
+
+  ipcMain.handle(IPC_CHANNELS.START_TELEMETRY, () => {
+    orchestrator.startTelemetry();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.STOP_TELEMETRY, () => {
+    orchestrator.stopTelemetry();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.IS_TELEMETRY_ACTIVE, () => {
+    return orchestrator.isTelemetryActive();
+  });
+
+  // --- Scores ---
+
+  ipcMain.handle(IPC_CHANNELS.GET_LATEST_SCORE, () => {
+    return database.getLatestScore();
+  });
+
+  // --- Interventions ---
+
+  ipcMain.handle(
+    IPC_CHANNELS.RESPOND_TO_INTERVENTION,
+    (_event, eventId: string, response: 'snoozed' | 'dismissed' | 'working') => {
+      orchestrator.handleInterventionResponse(eventId, response);
     }
+  );
 
-    const afterGeminiKey = db.getSetting<string>('geminiKey')
-    const afterElevenLabsKey = db.getSetting<string>('elevenLabsApiKey')
-    if (beforeGeminiKey !== afterGeminiKey) {
-      clearGeminiCache()
+  // --- Audio Played ---
+
+  ipcMain.handle(
+    IPC_CHANNELS.REPORT_AUDIO_PLAYED,
+    (_event, interventionId: string) => {
+      database.updateAudioPlayed(interventionId);
     }
-    if (beforeElevenLabsKey !== afterElevenLabsKey) {
-      // Placeholder for future ElevenLabs agent cache clearing.
-    }
+  );
 
-    return { ok: true }
-  })
+  // --- History ---
 
-  ipcMain.handle(IPC_CHANNELS.scores.getLatest, () => {
-    return db.getLatestScore()
-  })
+  ipcMain.handle(IPC_CHANNELS.GET_HISTORY, (_event, limit?: number) => {
+    return database.getScoreHistory(limit);
+  });
 
-  ipcMain.handle(IPC_CHANNELS.scores.getUsageHistory, (_event, payload: unknown) => {
-    const limit = (payload && typeof payload === 'object' && typeof (payload as { limit?: unknown }).limit === 'number')
-      ? (payload as { limit: number }).limit
-      : 200
-    return db.getScoreHistory(Math.max(1, Math.min(1000, limit)))
-  })
+  // --- Usage ---
 
-  ipcMain.handle(IPC_CHANNELS.scores.getAppStats, (_event, payload: unknown) => {
-    const minutes = (payload && typeof payload === 'object' && typeof (payload as { minutes?: unknown }).minutes === 'number')
-      ? (payload as { minutes: number }).minutes
-      : 60
-    return db.getAppStats(Math.max(1, Math.min(24 * 60, minutes)))
-  })
+  ipcMain.handle(IPC_CHANNELS.GET_USAGE_HISTORY, () => {
+    return database.getUsageHistory(60);
+  });
 
-  ipcMain.handle(IPC_CHANNELS.scores.getWins, () => {
-    return db.getWinsData()
-  })
+  // --- App Stats ---
 
-  ipcMain.handle(IPC_CHANNELS.todos.list, () => db.listTodos())
+  ipcMain.handle(IPC_CHANNELS.GET_APP_STATS, (_event, minutes?: number) => {
+    return database.getAppStats(minutes);
+  });
 
-  ipcMain.handle(IPC_CHANNELS.todos.create, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { text } = payload as { text?: unknown }
-    if (typeof text !== 'string' || text.trim().length === 0) throw new Error('Todo text required')
-    const todo = db.addTodo(text.trim())
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(IPC_CHANNELS.todos.onUpdated, { todos: db.listTodos() })
-    }
-    return todo
-  })
+  // --- Settings ---
 
-  ipcMain.handle(IPC_CHANNELS.todos.update, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { id, patch } = payload as { id?: unknown; patch?: unknown }
-    if (typeof id !== 'number' || !patch || typeof patch !== 'object') throw new Error('Invalid update')
-    const todo = db.updateTodo(id, patch as never)
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(IPC_CHANNELS.todos.onUpdated, { todos: db.listTodos() })
-    }
-    return todo
-  })
+  ipcMain.handle(IPC_CHANNELS.GET_SETTINGS, () => {
+    return database.getSettings();
+  });
 
-  ipcMain.handle(IPC_CHANNELS.todos.delete, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { id } = payload as { id?: unknown }
-    if (typeof id !== 'number') throw new Error('Invalid id')
-    db.deleteTodo(id)
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(IPC_CHANNELS.todos.onUpdated, { todos: db.listTodos() })
-    }
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.todos.extract, async (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const transcript = (payload as { transcript?: unknown }).transcript
-    if (typeof transcript !== 'string' || transcript.trim().length === 0) {
-      return { todos: [] as const }
-    }
-    const apiKey = db.getSetting<string>('geminiKey')
-    if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-      throwStructuredError({ code: 'missing_gemini_key', message: 'Gemini API key is not configured.' })
-    }
-    const todos = await extractTodosWithGemini({ apiKey, transcript, nowMs: Date.now() })
-    return { todos }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.interventions.respond, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { id, response } = payload as { id?: unknown; response?: unknown }
-    if (typeof id !== 'string') throw new Error('Invalid id')
-    if (response !== 'snoozed' && response !== 'dismissed' && response !== 'working') {
-      throw new Error('Invalid response')
-    }
-    orchestrator.respondToIntervention(id, response)
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.interventions.testIntervention, (_event, payload: unknown) => {
-    void payload
-    const now = Date.now()
-    mainWindow.webContents.send(IPC_CHANNELS.interventions.onIntervention, {
-      id: 'test',
-      timestamp: now,
-      score: 90,
-      severity: 4,
-      persona: 'coach',
-      text: 'Test intervention',
-      userResponse: 'pending',
-      audioPlayed: false
-    })
-    mainWindow.webContents.send(IPC_CHANNELS.interventions.onPlayAudio, {
-      id: 'test',
-      text: 'Test intervention',
-      persona: 'coach',
-      severity: 4,
-      tts: { model: 'eleven_turbo_v2', stability: 55, speed: 0.98 }
-    })
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.interventions.reportAudioPlayed, (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { id } = payload as { id?: unknown }
-    if (typeof id !== 'string') throw new Error('Invalid id')
-    db.markInterventionAudioPlayed(id)
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.permissions.getStatus, async () => {
-    return await getPermissionsStatus()
-  })
-
-  ipcMain.handle(IPC_CHANNELS.permissions.request, async () => {
-    return await requestPermissions()
-  })
-
-  ipcMain.handle(IPC_CHANNELS.todoOverlay.open, () => {
-    todoOverlay.show()
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.todoOverlay.close, () => {
-    todoOverlay.hide()
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.todoOverlay.isOpen, () => ({ open: todoOverlay.isOpen() }))
-
-  ipcMain.on(IPC_CHANNELS.voice.statusBroadcast, (event, payload: unknown) => {
-    const senderId = event.sender.id
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.webContents.id === senderId) continue
-      win.webContents.send(IPC_CHANNELS.voice.statusBroadcast, payload)
-    }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.voice.openVoiceChat, (_event, payload: unknown) => {
-    const mode = payload && typeof payload === 'object' ? (payload as { mode?: unknown }).mode : undefined
-    if (mode !== 'coach' && mode !== 'checkin') throw new Error('Invalid mode')
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.show()
-      mainWindow.focus()
-      mainWindow.webContents.send(IPC_CHANNELS.voice.onVoiceChatOpen, { mode })
-    }
-    return { ok: true }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.voice.ensureVoiceAgent, async (_event, payload: unknown) => {
-    return await ensureVoiceAgent(db, payload, 'voiceAgentId')
-  })
-
-  ipcMain.handle(IPC_CHANNELS.voice.ensureCheckinAgent, async (_event, payload: unknown) => {
-    return await ensureVoiceAgent(db, payload, 'checkinAgentId')
-  })
-
-  ipcMain.handle(IPC_CHANNELS.elevenlabs.synthesizeTts, async (_event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const { text, persona, tts } = payload as { text?: unknown; persona?: unknown; tts?: unknown }
-    if (typeof text !== 'string' || text.trim().length === 0) throw new Error('Invalid text')
-    const personaId = parsePersona(persona)
-    const ttsSettings = parseTtsSettings(tts)
-    const apiKey = db.getSetting<string>('elevenLabsApiKey')
-    if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-      throwStructuredError({ code: 'missing_elevenlabs_key', message: 'ElevenLabs API key is not configured.' })
-    }
-    const apiKeyTrimmed = apiKey.trim()
-    const voiceId = PERSONAS[personaId].voiceId
-    const stability01 = Math.max(0, Math.min(1, ttsSettings.stability / 100))
-    return await synthesizeElevenLabsTts({
-      apiKey: apiKeyTrimmed,
-      voiceId,
-      text: text.trim(),
-      modelId: ttsSettings.model,
-      stability: stability01
-    })
-  })
-
-  ipcMain.handle(IPC_CHANNELS.chat.stream, async (event, payload: unknown) => {
-    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
-    const message = (payload as { message?: unknown }).message
-    const sessionId = (payload as { sessionId?: unknown }).sessionId
-    if (typeof message !== 'string' || message.trim().length === 0) throw new Error('Invalid message')
-
-    const apiKey = db.getSetting<string>('geminiKey')
-    if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-      throwStructuredError({ code: 'missing_gemini_key', message: 'Gemini API key is not configured.' })
-    }
-
-    const resolvedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : randomUUID()
-
-    void (async () => {
-      try {
-        await streamGeminiChat(
-          { apiKey, sessionId: resolvedSessionId, message: message.trim() },
-          (delta) => event.sender.send(IPC_CHANNELS.chat.onToken, { sessionId: resolvedSessionId, delta })
-        )
-        event.sender.send(IPC_CHANNELS.chat.onDone, { sessionId: resolvedSessionId })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        event.sender.send(IPC_CHANNELS.chat.onError, { sessionId: resolvedSessionId, message: msg })
+  ipcMain.handle(
+    IPC_CHANNELS.UPDATE_SETTINGS,
+    (_event, settings: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(settings)) {
+        database.updateSetting(key, value);
       }
-    })()
+      orchestrator.refreshSettings();
+    }
+  );
 
-    return { sessionId: resolvedSessionId }
-  })
-}
+  // --- Test Intervention ---
 
-function parsePersona(value: unknown): PersonaId {
-  if (value === 'calm_friend' || value === 'coach' || value === 'tough_love') return value
-  return 'calm_friend'
-}
+  ipcMain.handle(IPC_CHANNELS.TEST_INTERVENTION, async () => {
+    const settings = database.getSettings();
+    let text = stripEmotionTags(INTERVENTION_SCRIPTS[settings.persona][1]);
 
-function parseTtsSettings(value: unknown): TTSSettings {
-  if (!value || typeof value !== 'object') {
-    return { model: 'eleven_turbo_v2', stability: 45, speed: 1.0 }
+    // Try Gemini for a dynamic script, fall back to hardcoded text
+    if (settings.scriptSource === 'gemini' && settings.geminiApiKey) {
+      const geminiText = await generateScript(settings.geminiApiKey, 1 as Severity, settings.persona);
+      if (geminiText) text = geminiText;
+    }
+
+    const intervention: InterventionEvent = {
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      score: 30,
+      severity: 1 as Severity,
+      persona: settings.persona,
+      text,
+      userResponse: 'pending',
+      audioPlayed: false,
+    };
+    database.insertIntervention(intervention);
+    const mainWindow = getMainWindow();
+    if (!mainWindow || mainWindow.isDestroyed()) return intervention;
+    mainWindow.webContents.send(IPC_CHANNELS.ON_INTERVENTION, intervention);
+    if (!settings.muted && text) {
+      mainWindow.webContents.send(IPC_CHANNELS.ON_PLAY_AUDIO, {
+        procrastinationScore: 30,
+        severity: 1 as Severity,
+        recommendation: { persona: settings.persona, text: intervention.text },
+        interventionId: intervention.id,
+      });
+    }
+    return intervention;
+  });
+
+  // --- Permissions ---
+
+  ipcMain.handle(IPC_CHANNELS.CHECK_PERMISSIONS, async () => {
+    if (process.platform !== 'darwin') {
+      return { screenRecording: true, status: 'granted', canReadActiveWindow: true };
+    }
+
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    if (status !== 'granted') {
+      return { screenRecording: false, status, canReadActiveWindow: false };
+    }
+
+    const now = Date.now();
+    if (now - lastScreenProbeAt > 5000) {
+      lastScreenProbeAt = now;
+      lastScreenProbeOk = await canReadActiveWindow();
+    }
+
+    return { screenRecording: lastScreenProbeOk, status, canReadActiveWindow: lastScreenProbeOk };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.REQUEST_PERMISSIONS, async () => {
+    if (process.platform !== 'darwin') return;
+
+    const statusBefore = systemPreferences.getMediaAccessStatus('screen');
+    if (statusBefore === 'granted') return;
+
+    lastScreenProbeAt = 0;
+    lastScreenProbeOk = await canReadActiveWindow();
+    if (lastScreenProbeOk) return;
+
+    const statusAfter = systemPreferences.getMediaAccessStatus('screen');
+    if (statusAfter !== 'granted') {
+      shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+      );
+    }
+  });
+
+  // --- Chat ---
+
+  ipcMain.on(IPC_CHANNELS.CHAT_SEND, async (event, payload: { message: string; sessionId: string }) => {
+    const { message, sessionId } = payload;
+    const settings = database.getSettings();
+
+    if (!settings.geminiApiKey) {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(IPC_CHANNELS.ON_CHAT_ERROR, 'No Gemini API key configured');
+        event.sender.send(IPC_CHANNELS.ON_CHAT_DONE);
+      }
+      return;
+    }
+
+    // Abort any in-flight stream for this session
+    const existing = chatAbortControllers.get(sessionId);
+    if (existing) {
+      existing.abort();
+      chatAbortControllers.delete(sessionId);
+    }
+    const controller = new AbortController();
+    chatAbortControllers.set(sessionId, controller);
+    const { signal } = controller;
+
+    // Get or create session history (with eviction of oldest sessions)
+    if (!chatSessions.has(sessionId)) {
+      if (chatSessions.size >= MAX_CHAT_SESSIONS) {
+        const oldest = chatSessions.keys().next().value;
+        if (oldest !== undefined) chatSessions.delete(oldest);
+      }
+      chatSessions.set(sessionId, []);
+    }
+    const history = chatSessions.get(sessionId)!;
+    history.push({ role: 'user', content: message });
+
+    // Trim old messages to prevent unbounded growth
+    if (history.length > MAX_MESSAGES_PER_SESSION) {
+      history.splice(0, history.length - MAX_MESSAGES_PER_SESSION);
+    }
+
+    const nameClause = settings.userName ? ` The user's name is ${settings.userName}.` : '';
+    const systemInstruction =
+      `You are noRot, a friendly AI productivity companion.${nameClause} ` +
+      'Help the user plan their work, break down tasks, and stay focused. ' +
+      'Be concise and actionable. When the user describes tasks, help them create a clear plan.';
+
+    let fullReply = '';
+    try {
+      for await (const token of streamChat(settings.geminiApiKey, history, systemInstruction)) {
+        if (signal.aborted || event.sender.isDestroyed()) break;
+        fullReply += token;
+        event.sender.send(IPC_CHANNELS.ON_CHAT_TOKEN, token);
+      }
+      if (!signal.aborted) {
+        history.push({ role: 'assistant', content: fullReply });
+      }
+    } catch (err) {
+      if (!signal.aborted && !event.sender.isDestroyed()) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown chat error';
+        console.error('[ipc] chat error:', errMsg);
+        event.sender.send(IPC_CHANNELS.ON_CHAT_ERROR, errMsg);
+      }
+    } finally {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send(IPC_CHANNELS.ON_CHAT_DONE);
+      }
+      if (chatAbortControllers.get(sessionId)?.signal === signal) {
+        chatAbortControllers.delete(sessionId);
+      }
+    }
+  });
+
+  ipcMain.on(IPC_CHANNELS.CHAT_CANCEL, () => {
+    for (const [id, controller] of chatAbortControllers) {
+      controller.abort();
+      chatAbortControllers.delete(id);
+    }
+  });
+
+  // --- Todos ---
+
+  function broadcastTodos(): void {
+    const todos = database.getTodos();
+    const main = getMainWindow();
+    if (main && !main.isDestroyed()) {
+      main.webContents.send(IPC_CHANNELS.ON_TODOS_UPDATED, todos);
+    }
+    const todo = getTodoWindow();
+    if (todo && !todo.isDestroyed()) {
+      todo.webContents.send(IPC_CHANNELS.ON_TODOS_UPDATED, todos);
+    }
   }
-  const model = (value as { model?: unknown }).model
-  const stability = (value as { stability?: unknown }).stability
-  const speed = (value as { speed?: unknown }).speed
-  return {
-    model: typeof model === 'string' && model.trim() ? model : 'eleven_turbo_v2',
-    stability: typeof stability === 'number' && Number.isFinite(stability) ? stability : 45,
-    speed: typeof speed === 'number' && Number.isFinite(speed) ? speed : 1.0
-  }
-}
 
-async function ensureVoiceAgent(
-  db: LocalDatabase,
-  payload: unknown,
-  idKey: 'voiceAgentId' | 'checkinAgentId'
-): Promise<{ agentId: string; conversationToken?: string; signedUrl?: string }> {
-  const connectionType = payload && typeof payload === 'object'
-    ? (payload as { connectionType?: unknown }).connectionType
-    : undefined
-  const type = connectionType === 'websocket' ? 'websocket' : 'webrtc'
+  ipcMain.handle(IPC_CHANNELS.GET_TODOS, () => {
+    return database.getTodos();
+  });
 
-  const apiKey = db.getSetting<string>('elevenLabsApiKey')
-  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-    throwStructuredError({ code: 'missing_elevenlabs_key', message: 'ElevenLabs API key is not configured.' })
-  }
-  const apiKeyTrimmed = apiKey.trim()
+  ipcMain.handle(IPC_CHANNELS.ADD_TODO, (_event, item: TodoItem) => {
+    database.addTodo(item);
+    broadcastTodos();
+  });
 
-  const agentId = db.getSetting<string>(idKey)
-  if (typeof agentId !== 'string' || agentId.trim().length === 0) {
-    throwStructuredError({
-      code: 'missing_agent_id',
-      message: `Missing ${idKey}. Create an agent in ElevenLabs UI and paste the agent ID into Settings.`
-    })
-  }
-  const agentIdTrimmed = agentId.trim()
+  ipcMain.handle(IPC_CHANNELS.TOGGLE_TODO, (_event, id: string) => {
+    database.toggleTodo(id);
+    broadcastTodos();
+  });
 
-  if (type === 'websocket') {
-    const signedUrl = await getElevenLabsSignedUrl({ apiKey: apiKeyTrimmed, agentId: agentIdTrimmed })
-    return { agentId: agentIdTrimmed, signedUrl }
-  }
+  ipcMain.handle(IPC_CHANNELS.DELETE_TODO, (_event, id: string) => {
+    database.deleteTodo(id);
+    broadcastTodos();
+  });
 
-  const conversationToken = await getElevenLabsConversationToken({ apiKey: apiKeyTrimmed, agentId: agentIdTrimmed })
-  return { agentId: agentIdTrimmed, conversationToken }
-}
+  ipcMain.handle(IPC_CHANNELS.REORDER_TODOS, (_event, id: string, newOrder: number) => {
+    database.reorderTodo(id, newOrder);
+    broadcastTodos();
+  });
 
-function throwStructuredError(payload: { code: string; message: string }): never {
-  throw new Error(JSON.stringify(payload))
+  ipcMain.handle(IPC_CHANNELS.SET_TODOS, (_event, items: TodoItem[]) => {
+    database.setTodos(items);
+    broadcastTodos();
+  });
+
+  // --- Todo Overlay Window ---
+
+  ipcMain.handle(IPC_CHANNELS.OPEN_TODO_OVERLAY, () => {
+    createTodoOverlayWindow();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CLOSE_TODO_OVERLAY, () => {
+    const todoWin = getTodoWindow();
+    if (todoWin && !todoWin.isDestroyed()) {
+      todoWin.destroy();
+      setTodoWindow(null);
+    }
+  });
+
+  // --- Voice Status Broadcast ---
+
+  ipcMain.on(IPC_CHANNELS.BROADCAST_VOICE_STATUS, (_event, payload: { isSpeaking: boolean; severity: number; amplitude: number }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.ON_VOICE_STATUS, payload);
+      }
+    }
+  });
 }

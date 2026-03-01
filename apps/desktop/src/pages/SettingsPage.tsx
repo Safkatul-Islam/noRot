@@ -1,240 +1,910 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+import { GlassCard } from '@/components/GlassCard';
+import { CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Slider } from '@/components/ui/slider';
+import { Button } from '@/components/ui/button';
+import { PersonaSelector } from '@/components/PersonaSelector';
+import { BlurFade } from '@/components/effects/BlurFade';
+import { AudioPlayer } from '@/services/audio/audio-player';
+import { ElevenLabsClient } from '@/services/voice/elevenlabs-client';
+import { useSettings } from '@/hooks/useSettings';
+import { FREQUENCY_PRESETS } from '@/lib/frequency-presets';
+import type { FrequencyLevel } from '@/lib/frequency-presets';
+import { getNorotAPI } from '@/lib/norot-api';
+import type { UserSettings } from '@/lib/electron-api';
+import { useAppStore } from '@/stores/app-store';
+import { useSettingsStore, ACCENT_PRESETS, ACCENT_IDS } from '@/stores/settings-store';
+import type { AccentColorId } from '@/stores/settings-store';
+import { SEVERITY_BANDS, PERSONAS, INTERVENTION_SCRIPTS, stripEmotionTags } from '@norot/shared';
+import type { Severity, Persona } from '@norot/shared';
+import { cn } from '@/lib/utils';
+import {
+  Settings2,
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
+  Gauge,
+  MessageSquare,
+  Info,
+  Palette,
+  Check,
+  Play,
+  CheckCircle,
+  XCircle,
+  Loader2,
+  Zap,
+  Shield,
+  ShieldCheck,
+  ListTodo,
+  Maximize2,
+  RotateCcw,
+} from 'lucide-react';
 
-import type { PersonaId } from '@norot/shared'
-
-import { IPC_CHANNELS } from '../ipc-channels'
-import { usePermissions } from '../hooks/usePermissions'
-import { useSettingsStore } from '../stores/settings-store'
-
-function parsePersona(value: string): PersonaId {
-  if (value === 'calm_friend' || value === 'coach' || value === 'tough_love') return value
-  return 'calm_friend'
+function getPreviewMessages(persona: Persona): { severity: Severity; text: string }[] {
+  const scripts = INTERVENTION_SCRIPTS[persona];
+  return ([1, 2, 3, 4] as Severity[]).map((sev) => ({
+    severity: sev,
+    text: stripEmotionTags(scripts[sev] ?? ''),
+  }));
 }
 
 export function SettingsPage() {
-  const settings = useSettingsStore(s => s.settings)
-  const update = useSettingsStore(s => s.update)
-  const { status: permissions, request: requestPermissions, refresh: refreshPermissions } = usePermissions()
+  const {
+    persona,
+    interventionFrequency,
+    muted,
+    ttsEngine,
+    updatePersona,
+    updateFrequency,
+    updateMuted,
+    updateTtsEngine,
+  } = useSettings();
 
-  const [apiUrl, setApiUrl] = useState(settings?.apiUrl ?? 'http://localhost:8000')
-  const [persona, setPersona] = useState<PersonaId>(settings?.persona ?? 'calm_friend')
-  const [toughLoveEnabled, setToughLoveEnabled] = useState(settings?.toughLoveEnabled ?? false)
-  const [monitoringEnabled, setMonitoringEnabled] = useState(settings?.monitoringEnabled ?? true)
-  const [autoShowTodoOverlay, setAutoShowTodoOverlay] = useState(settings?.autoShowTodoOverlay ?? true)
-  const [muted, setMuted] = useState(settings?.muted ?? false)
-  const [geminiKey, setGeminiKey] = useState(settings?.geminiKey ?? '')
-  const [elevenLabsApiKey, setElevenLabsApiKey] = useState(settings?.elevenLabsApiKey ?? '')
-  const [voiceAgentId, setVoiceAgentId] = useState(settings?.voiceAgentId ?? '')
-  const [checkinAgentId, setCheckinAgentId] = useState(settings?.checkinAgentId ?? '')
+  const connectionStatus = useAppStore((s) => s.connectionStatus);
+  const accentColor = useSettingsStore((s) => s.accentColor);
+  const setAccentColor = useSettingsStore((s) => s.setAccentColor);
 
-  const [status, setStatus] = useState<string | null>(null)
-  const [telemetryActive, setTelemetryActive] = useState<boolean | null>(null)
+  const [apiUrl, setApiUrl] = useState('http://127.0.0.1:8000');
+  const [apiUrlDraft, setApiUrlDraft] = useState('http://127.0.0.1:8000');
+  const [savingApiUrl, setSavingApiUrl] = useState(false);
+
+  const [elevenLabsConfigured, setElevenLabsConfigured] = useState(false);
+  const [elevenLabsApiKeyDraft, setElevenLabsApiKeyDraft] = useState('');
+  const [savingElevenLabsApiKey, setSavingElevenLabsApiKey] = useState(false);
+
+  const [geminiConfigured, setGeminiConfigured] = useState(false);
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState('');
+  const [savingGeminiApiKey, setSavingGeminiApiKey] = useState(false);
+
+  const [testingVoice, setTestingVoice] = useState(false);
+  const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const [testingIntervention, setTestingIntervention] = useState(false);
+  const [interventionTestResult, setInterventionTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const [telemetryActive, setTelemetryActive] = useState<boolean | null>(null);
+  const [permissionsGranted, setPermissionsGranted] = useState<boolean | null>(null);
+  const [screenRecordingStatus, setScreenRecordingStatus] = useState<string | null>(null);
+  const [requestingPermissions, setRequestingPermissions] = useState(false);
+  const [permissionsRequestStarted, setPermissionsRequestStarted] = useState(false);
+  const [visionEnabled, setVisionEnabled] = useState(true);
+  const [savingVisionEnabled, setSavingVisionEnabled] = useState(false);
+  const [scriptSource, setScriptSourceLocal] = useState<'default' | 'gemini'>('default');
+  const [autoShowTodoOverlay, setAutoShowTodoOverlay] = useState(false);
+  const [savingAutoShowTodo, setSavingAutoShowTodo] = useState(false);
+
+  const statusLabels: Record<string, string> = {
+    connected: 'Connected to API',
+    disconnected: 'Disconnected',
+  };
 
   useEffect(() => {
-    if (!settings) return
-    setApiUrl(settings.apiUrl)
-    setPersona(settings.persona)
-    setToughLoveEnabled(settings.toughLoveEnabled)
-    setMonitoringEnabled(settings.monitoringEnabled)
-    setAutoShowTodoOverlay(settings.autoShowTodoOverlay)
-    setMuted(settings.muted)
-    setGeminiKey(settings.geminiKey)
-    setElevenLabsApiKey(settings.elevenLabsApiKey)
-    setVoiceAgentId(settings.voiceAgentId)
-    setCheckinAgentId(settings.checkinAgentId)
-  }, [settings])
+    let cancelled = false;
+    const api = getNorotAPI();
+    api.getSettings()
+      .then((settings: UserSettings) => {
+        const url = typeof settings?.apiUrl === 'string' ? settings.apiUrl.trim() : '';
+        if (!cancelled && url) {
+          setApiUrl(url);
+          setApiUrlDraft(url);
+        }
 
-  const hasElevenLabsKey = useMemo(() => elevenLabsApiKey.trim().length > 0, [elevenLabsApiKey])
+        const key =
+          typeof settings?.elevenLabsApiKey === 'string'
+            ? settings.elevenLabsApiKey.trim()
+            : '';
+        if (!cancelled) setElevenLabsConfigured(key.length > 0);
 
-  const refreshTelemetry = async () => {
-    const res = await window.norot.invoke<{ active: boolean }>(IPC_CHANNELS.telemetry.isActive)
-    setTelemetryActive(!!res?.active)
-  }
+        const geminiKey =
+          typeof settings?.geminiApiKey === 'string'
+            ? settings.geminiApiKey.trim()
+            : '';
+        if (!cancelled) setGeminiConfigured(geminiKey.length > 0);
+        if (!cancelled) setScriptSourceLocal(settings?.scriptSource ?? 'default');
+
+        if (!cancelled) setVisionEnabled(settings?.visionEnabled ?? true);
+        if (!cancelled) setAutoShowTodoOverlay(settings?.autoShowTodoOverlay ?? false);
+      })
+      .catch(() => {
+        // ignore
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    void refreshTelemetry()
-  }, [])
+    getNorotAPI().isTelemetryActive()
+      .then((active) => setTelemetryActive(active))
+      .catch(() => setTelemetryActive(false));
+  }, []);
 
-  const save = async () => {
-    setStatus(null)
-    const res = await update({
-      apiUrl,
-      persona,
-      toughLoveEnabled,
-      monitoringEnabled,
-      autoShowTodoOverlay,
-      muted,
-      geminiKey,
-      elevenLabsApiKey,
-      voiceAgentId,
-      checkinAgentId
-    })
-    if (!res.ok) {
-      setStatus(res.error?.message ?? 'Failed to save')
-      return
+  useEffect(() => {
+    const check = () => {
+      try {
+        const api = getNorotAPI();
+        if (typeof api.checkPermissions !== 'function') {
+          setPermissionsGranted(false);
+          return;
+        }
+        api.checkPermissions()
+          .then((p) => {
+            setPermissionsGranted(p.screenRecording);
+            setScreenRecordingStatus(typeof p.status === 'string' ? p.status : null);
+          })
+          .catch(() => setPermissionsGranted(false));
+      } catch {
+        setPermissionsGranted(false);
+      }
+    };
+    check();
+    const interval = setInterval(check, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const requestPermissions = async () => {
+    setPermissionsRequestStarted(true);
+    setRequestingPermissions(true);
+    try {
+      const api = getNorotAPI();
+      if (typeof api.requestPermissions === 'function') {
+        await api.requestPermissions();
+      }
+    } catch {
+      // ignore
+    } finally {
+      setRequestingPermissions(false);
     }
-    setStatus('Saved')
-    if (monitoringEnabled) {
-      await window.norot.invoke(IPC_CHANNELS.telemetry.start)
-    } else {
-      await window.norot.invoke(IPC_CHANNELS.telemetry.stop)
+  };
+
+  const relaunchApp = async () => {
+    try {
+      const api = getNorotAPI();
+      if (typeof api.relaunchApp === 'function') {
+        const href = typeof window !== 'undefined' ? window.location.href : '';
+        const url = href ? new URL(href) : null;
+        const rendererUrl = url && url.protocol.startsWith('http') ? url.origin : undefined;
+        await api.relaunchApp(rendererUrl);
+      }
+    } catch {
+      // ignore
     }
-    await refreshTelemetry()
-  }
+  };
+
+  const toggleVisionEnabled = async () => {
+    setSavingVisionEnabled(true);
+    try {
+      const api = getNorotAPI();
+      const next = !visionEnabled;
+      setVisionEnabled(next);
+      await api.updateSettings({ visionEnabled: next });
+    } catch {
+      // ignore
+    } finally {
+      setSavingVisionEnabled(false);
+    }
+  };
+
+  const saveApiUrl = async () => {
+    const next = apiUrlDraft.trim();
+    if (!next) return;
+    setSavingApiUrl(true);
+    try {
+      const api = getNorotAPI();
+      await api.updateSettings({ apiUrl: next });
+      setApiUrl(next);
+    } catch {
+      // ignore
+    } finally {
+      setSavingApiUrl(false);
+    }
+  };
+
+  const saveElevenLabsApiKey = async () => {
+    const next = elevenLabsApiKeyDraft.trim();
+    setSavingElevenLabsApiKey(true);
+    try {
+      const api = getNorotAPI();
+      await api.updateSettings({ elevenLabsApiKey: next });
+      setElevenLabsConfigured(next.length > 0);
+      setElevenLabsApiKeyDraft('');
+    } catch {
+      // ignore
+    } finally {
+      setSavingElevenLabsApiKey(false);
+    }
+  };
+
+  const saveGeminiApiKey = async () => {
+    const next = geminiApiKeyDraft.trim();
+    setSavingGeminiApiKey(true);
+    try {
+      const api = getNorotAPI();
+      await api.updateSettings({ geminiApiKey: next });
+      setGeminiConfigured(next.length > 0);
+      if (next.length === 0 && scriptSource === 'gemini') {
+        setScriptSourceLocal('default');
+        await api.updateSettings({ scriptSource: 'default' });
+      }
+      setGeminiApiKeyDraft('');
+    } catch {
+      // ignore
+    } finally {
+      setSavingGeminiApiKey(false);
+    }
+  };
+
+  const updateScriptSource = async (next: 'default' | 'gemini') => {
+    setScriptSourceLocal(next);
+    try {
+      await getNorotAPI().updateSettings({ scriptSource: next });
+    } catch {
+      // ignore
+    }
+  };
+
+  const testVoice = async () => {
+    setTestingVoice(true);
+    setTestResult('idle');
+    try {
+      if (ttsEngine === 'local') {
+        if (!('speechSynthesis' in window)) throw new Error('Not available');
+        const utter = new SpeechSynthesisUtterance('Testing local voice.');
+        await new Promise<void>((resolve, reject) => {
+          utter.onend = () => resolve();
+          utter.onerror = (e) => reject(new Error(e.error));
+          speechSynthesis.speak(utter);
+        });
+      } else {
+        const player = new AudioPlayer();
+        if (elevenLabsConfigured) {
+          const client = new ElevenLabsClient();
+          const audio = await client.synthesize('Testing voice.', 'EXAVITQu4vr4xnSDxMaL', { model: 'eleven_v3', stability: 50, speed: 1.0 });
+          await player.play(audio);
+        } else {
+          await player.playUrl('/audio/calm_friend/severity-1.mp3');
+        }
+      }
+      setTestResult('success');
+    } catch {
+      setTestResult('error');
+    } finally {
+      setTestingVoice(false);
+    }
+  };
+
+  const testIntervention = async () => {
+    setTestingIntervention(true);
+    setInterventionTestResult('idle');
+    try {
+      await getNorotAPI().testIntervention();
+      setInterventionTestResult('success');
+    } catch {
+      setInterventionTestResult('error');
+    } finally {
+      setTestingIntervention(false);
+    }
+  };
+
+  const previewMessages = getPreviewMessages(persona);
 
   return (
-    <div className="space-y-6">
-      {status ? <div className="rounded border border-white/10 bg-white/10 px-3 py-2 text-sm">{status}</div> : null}
+    <div className="flex flex-col gap-5 pb-10">
+      {/* Top row: Persona selector + Preview */}
+      <div className="grid grid-cols-12 gap-5 shrink-0">
+        <BlurFade delay={0} className="col-span-7">
+          <GlassCard className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings2 className="size-5 text-primary" />
+                Persona
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Choose how noRot talks to you during interventions.
+              </p>
+              <PersonaSelector selectedPersona={persona} onSelect={updatePersona} />
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
 
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">Connection</div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <label className="text-sm">
-            <div className="text-white/60">API URL</div>
-            <input
-              value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
-              className="mt-1 w-full rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
-            />
-          </label>
-          <div className="text-sm">
-            <div className="text-white/60">Telemetry</div>
-            <div className="mt-2 text-white/80">
-              {telemetryActive === null ? '—' : (telemetryActive ? 'active' : 'paused')}
-            </div>
-          </div>
-        </div>
+        <BlurFade delay={0.05} className="col-span-5">
+          <GlassCard variant="well" className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MessageSquare className="size-5 text-primary" />
+                {PERSONAS[persona].label} Preview
+              </CardTitle>
+              <p className="text-xs text-text-muted mt-1">
+                {scriptSource === 'gemini'
+                  ? 'With Gemini AI selected, actual messages will vary. These are fallback examples.'
+                  : "Here's what your coach will say at each level."}
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2.5">
+                {previewMessages.map(({ severity, text }) => {
+                  const band = SEVERITY_BANDS[severity];
+                  return (
+                    <div
+                      key={severity}
+                      className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] backdrop-blur-[12px] p-2.5 space-y-1"
+                      style={{ borderLeft: `3px solid ${band.color}`, boxShadow: `inset 2px 0 6px ${band.color}15` }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-medium" style={{ color: band.color }}>
+                          {band.label}
+                        </span>
+                        <span className="text-[10px] text-text-muted">{band.mode}</span>
+                      </div>
+                      <p className="text-xs text-text-secondary leading-relaxed">
+                        &ldquo;{text}&rdquo;
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
       </div>
 
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">Persona</div>
-        <div className="mt-3 flex flex-wrap items-end gap-4">
-          <label className="text-sm">
-            <div className="text-white/60">Persona</div>
-            <select
-              value={persona}
-              onChange={(e) => setPersona(parsePersona(e.target.value))}
-              className="mt-1 rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
+      {/* Row 2: Accent Color + stacked Threshold/Cooldown */}
+      <div className="grid grid-cols-12 gap-5 items-start">
+        <BlurFade delay={0.1} className="col-span-6">
+          <GlassCard>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Palette className="size-5 text-primary" />
+                Accent Color
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Choose an accent color for the interface and fluid background.
+              </p>
+              <div className="flex flex-wrap gap-3 justify-center">
+                {ACCENT_IDS.map((id) => {
+                  const preset = ACCENT_PRESETS[id];
+                  const isActive = accentColor === id;
+                  return (
+                    <motion.button
+                      key={id}
+                      onClick={() => setAccentColor(id)}
+                      whileHover={{ scale: 1.15 }}
+                      whileTap={{ scale: 0.95 }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                      className={cn(
+                        'relative w-10 h-10 rounded-full transition-all duration-200',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
+                      )}
+                      style={{
+                        backgroundColor: preset.primary,
+                        boxShadow: isActive
+                          ? `0 0 0 2px var(--color-background), 0 0 0 4px ${preset.primary}, 0 0 20px ${preset.glow}`
+                          : `0 0 8px ${preset.primary}30`,
+                      }}
+                      title={preset.label}
+                    >
+                      {isActive && (
+                        <Check className="absolute inset-0 m-auto size-4 text-primary-foreground drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" />
+                      )}
+                    </motion.button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-text-muted text-center">
+                {ACCENT_PRESETS[accentColor].label}
+              </p>
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
+
+        <BlurFade delay={0.15} className="col-span-6">
+          <GlassCard>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Gauge className="size-5 text-primary" />
+                Intervention Frequency
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <p className="text-sm text-text-secondary leading-relaxed">
+                How often should noRot check in with you?
+              </p>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between text-[10px] text-text-muted px-1">
+                  <span>Rarely</span>
+                  <span>Often</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={4}
+                  step={1}
+                  value={[interventionFrequency]}
+                  onValueChange={([v]) => updateFrequency(v as FrequencyLevel)}
+                />
+                {/* Dot indicators for the 5 discrete stops */}
+                <div className="flex justify-between px-[10px]">
+                  {FREQUENCY_PRESETS.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className={cn(
+                        'size-2 rounded-full transition-all',
+                        preset.id === interventionFrequency
+                          ? 'bg-primary scale-125'
+                          : 'bg-text-muted/30',
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-center text-lg font-semibold text-text-primary">
+                {FREQUENCY_PRESETS[interventionFrequency].label}
+              </p>
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
+      </div>
+
+      {/* Row 3: Audio + Connection — equal halves */}
+      <div className="grid grid-cols-12 gap-5 items-start">
+        <BlurFade delay={0.25} className="col-span-6">
+          <GlassCard className="h-full">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                {muted
+                  ? <VolumeX className="size-5 text-danger" />
+                  : <Volume2 className="size-5 text-primary" />}
+                Audio
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {/* TTS Engine selector */}
+              <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-glass-well)] border border-white/[0.05]">
+                {([
+                  { value: 'auto' as const, label: 'Auto', desc: 'ElevenLabs with MP3 fallback' },
+                  { value: 'elevenlabs' as const, label: 'ElevenLabs', desc: 'API voice only (uses credits)' },
+                  { value: 'local' as const, label: 'Local (Free)', desc: 'Browser built-in voice' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => updateTtsEngine(opt.value)}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all',
+                      ttsEngine === opt.value
+                        ? 'bg-primary/20 text-primary border border-primary/30'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.03]'
+                    )}
+                    title={opt.desc}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-text-muted text-center">
+                {ttsEngine === 'auto' && 'Tries ElevenLabs, falls back to local MP3s.'}
+                {ttsEngine === 'elevenlabs' && 'ElevenLabs API only. Uses credits per intervention.'}
+                {ttsEngine === 'local' && 'Free browser voice. No API key needed.'}
+              </p>
+
+              <p className="text-xs text-text-secondary leading-relaxed">
+                {muted
+                  ? 'Voice interventions are muted.'
+                  : 'Voice interventions enabled.'}
+              </p>
+
+              <Button
+                variant="outline"
+                className={cn(
+                  'w-full',
+                  muted
+                    ? 'border-danger/30 text-danger hover:bg-danger/10'
+                    : 'border-success/30 text-success hover:bg-success/10'
+                )}
+                onClick={updateMuted}
+              >
+                {muted ? <VolumeX className="size-4 mr-2" /> : <Volume2 className="size-4 mr-2" />}
+                {muted ? 'Unmute' : 'Mute'}
+              </Button>
+
+              <Button
+                variant="outline"
+                className="w-full border-white/[0.06] text-text-secondary hover:text-text-primary"
+                onClick={testVoice}
+                disabled={testingVoice}
+              >
+                {testingVoice ? (
+                  <Loader2 className="size-4 mr-2 animate-spin" />
+                ) : testResult === 'success' ? (
+                  <CheckCircle className="size-4 mr-2 text-success" />
+                ) : testResult === 'error' ? (
+                  <XCircle className="size-4 mr-2 text-danger" />
+                ) : (
+                  <Play className="size-4 mr-2" />
+                )}
+                {testingVoice ? 'Testing...' : testResult === 'success' ? 'Voice OK' : testResult === 'error' ? 'Test Failed' : 'Test Voice'}
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full border-primary/20 text-primary hover:bg-primary/10"
+                onClick={testIntervention}
+                disabled={testingIntervention}
+              >
+                {testingIntervention ? (
+                  <Loader2 className="size-4 mr-2 animate-spin" />
+                ) : interventionTestResult === 'success' ? (
+                  <CheckCircle className="size-4 mr-2 text-success" />
+                ) : interventionTestResult === 'error' ? (
+                  <XCircle className="size-4 mr-2 text-danger" />
+                ) : (
+                  <Zap className="size-4 mr-2" />
+                )}
+                {testingIntervention ? 'Testing...' : interventionTestResult === 'success' ? 'Intervention Sent' : interventionTestResult === 'error' ? 'Test Failed' : 'Test Intervention'}
+              </Button>
+              {elevenLabsConfigured && (
+                <p className="text-[10px] text-text-muted text-center">Uses a small amount of API credits</p>
+              )}
+
+              <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
+                <p className="text-[10px] text-text-muted uppercase tracking-wider">
+                  ElevenLabs Key
+                </p>
+                <div className="flex gap-1.5">
+                  <input
+                    type="password"
+                    value={elevenLabsApiKeyDraft}
+                    onChange={(e) => setElevenLabsApiKeyDraft(e.target.value)}
+                    placeholder="Paste key"
+                    spellCheck={false}
+                    className="flex-1 bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/40"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={saveElevenLabsApiKey}
+                    disabled={savingElevenLabsApiKey}
+                    className="text-xs"
+                  >
+                    {savingElevenLabsApiKey ? '...' : 'Save'}
+                  </Button>
+                </div>
+                <p className="text-[10px] text-text-muted">
+                  {elevenLabsConfigured ? 'Live TTS enabled.' : 'Using fallback MP3s.'}
+                </p>
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  When enabled, short motivational messages are sent to ElevenLabs servers for voice synthesis. No app names or personal data is included.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
+                <p className="text-[10px] text-text-muted uppercase tracking-wider">
+                  Gemini AI Key
+                </p>
+                <div className="flex gap-1.5">
+                  <input
+                    type="password"
+                    value={geminiApiKeyDraft}
+                    onChange={(e) => setGeminiApiKeyDraft(e.target.value)}
+                    placeholder="Paste key"
+                    spellCheck={false}
+                    className="flex-1 bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/40"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={saveGeminiApiKey}
+                    disabled={savingGeminiApiKey}
+                    className="text-xs"
+                  >
+                    {savingGeminiApiKey ? '...' : 'Save'}
+                  </Button>
+                </div>
+                <p className="text-[10px] text-text-muted">
+                  {geminiConfigured ? 'Dynamic AI scripts enabled.' : 'Using default scripts.'}
+                </p>
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  Only severity level and persona style are sent — no app names or personal data.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
+                <p className="text-[10px] text-text-muted uppercase tracking-wider">
+                  Script Source
+                </p>
+                <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-glass-well)] border border-white/[0.05]">
+                  <button
+                    onClick={() => updateScriptSource('default')}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all',
+                      scriptSource === 'default'
+                        ? 'bg-primary/20 text-primary border border-primary/30'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.03]'
+                    )}
+                  >
+                    Default
+                  </button>
+                  <button
+                    onClick={() => updateScriptSource('gemini')}
+                    disabled={!geminiConfigured}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all',
+                      scriptSource === 'gemini'
+                        ? 'bg-primary/20 text-primary border border-primary/30'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.03]',
+                      !geminiConfigured && 'opacity-40 cursor-not-allowed'
+                    )}
+                  >
+                    Gemini AI
+                  </button>
+                </div>
+                <p className="text-[10px] text-text-muted">
+                  {scriptSource === 'default'
+                    ? 'Free, on-device scripts that name what you\'re doing.'
+                    : 'AI-generated scripts (uses Gemini API tokens).'}
+                </p>
+              </div>
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
+
+        <BlurFade delay={0.3} className="col-span-6">
+          <div className="flex flex-col gap-5">
+            <GlassCard variant="well">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  {connectionStatus === 'disconnected'
+                    ? <WifiOff className="size-5 text-danger" />
+                    : <Wifi className="size-5 text-primary" />}
+                  Connection
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)]">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    connectionStatus === 'connected' ? 'bg-success' : 'bg-danger'
+                  }`} style={{ boxShadow: '0 0 6px currentColor' }} />
+                  <span className={`text-xs font-medium ${
+                    connectionStatus === 'connected' ? 'text-success' : 'text-danger'
+                  }`}>
+                    {statusLabels[connectionStatus]}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)]">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    telemetryActive ? 'bg-success' : 'bg-warning'
+                  }`} style={{ boxShadow: '0 0 6px currentColor' }} />
+                  <span className={`text-xs font-medium ${
+                    telemetryActive ? 'text-success' : 'text-warning'
+                  }`}>
+                    {telemetryActive === null ? 'Checking...' : telemetryActive ? 'Monitoring: Active' : 'Monitoring: Paused'}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wider">API URL</p>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={apiUrlDraft}
+                      onChange={(e) => setApiUrlDraft(e.target.value)}
+                      placeholder="http://127.0.0.1:8000"
+                      spellCheck={false}
+                      className="flex-1 bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/40"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={saveApiUrl}
+                      disabled={savingApiUrl}
+                      className="text-xs"
+                    >
+                      {savingApiUrl ? '...' : 'Save'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-1.5 p-2 rounded-lg border border-white/[0.04]">
+                  <Info className="size-3.5 text-text-muted shrink-0 mt-0.5" />
+                  <p className="text-[10px] text-text-muted leading-relaxed">
+                    {connectionStatus === 'connected'
+                      ? `API reachable at ${apiUrl}.`
+                      : `Run \`npm run dev:api\` to start the API.`}
+                  </p>
+                </div>
+              </CardContent>
+            </GlassCard>
+
+            <GlassCard>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  {permissionsGranted
+                    ? <ShieldCheck className="size-5 text-success" />
+                    : <Shield className="size-5 text-primary" />}
+                  Permissions
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <p className="text-xs text-text-secondary leading-relaxed">
+                  noRot needs Screen Recording permission to detect which app you're using.
+                </p>
+
+                {permissionsGranted === null ? (
+                  <div className="flex items-center gap-2 p-2 rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)]">
+                    <Loader2 className="size-4 animate-spin text-text-muted" />
+                    <span className="text-xs text-text-muted">Checking permissions...</span>
+                  </div>
+                ) : permissionsGranted ? (
+                  <div className="flex items-center gap-2 p-2 rounded-lg border border-success/20 bg-success/5">
+                    <ShieldCheck className="size-4 text-success" />
+                    <div className="flex flex-col">
+                      <span className="text-xs font-medium text-success">Permissions granted</span>
+                      {screenRecordingStatus && (
+                        <span className="text-[10px] text-text-muted">Screen Recording: {screenRecordingStatus}</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      variant="outline"
+                      className="w-full border-primary/30 text-primary hover:bg-primary/10"
+                      disabled={requestingPermissions}
+                      onClick={requestPermissions}
+                    >
+                      <Shield className="size-4 mr-2" />
+                      {requestingPermissions ? 'Requesting...' : 'Turn On Permissions'}
+                    </Button>
+
+                    {screenRecordingStatus && (
+                      <p className="text-[10px] text-text-muted">
+                        Screen Recording status: <span className="text-text-secondary">{screenRecordingStatus}</span>
+                      </p>
+                    )}
+
+                    {permissionsRequestStarted && (
+                      <div className="flex items-start gap-2 p-2 rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)]">
+                        <Zap className="size-4 text-text-muted shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-xs text-text-muted leading-relaxed">
+                            If you previously denied this permission, macOS may not show the prompt again. Enable noRot under
+                            <span className="text-text-secondary"> Privacy &amp; Security → Screen Recording</span>, then relaunch noRot.
+                          </p>
+                          <p className="text-[10px] text-text-muted leading-relaxed mt-1">
+                            Tip: if you are running the dev build, macOS may list it as <span className="text-text-secondary">Electron</span> instead of noRot.
+                          </p>
+                          <div className="mt-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-white/[0.08]"
+                              onClick={relaunchApp}
+                            >
+                              Relaunch noRot
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-2">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wider">On-device AI tracking</p>
+                  <p className="text-xs text-text-secondary leading-relaxed">
+                    Uses a local model to guess what you are doing from the active window. Screenshots stay on your computer.
+                    The model may download on first use.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={savingVisionEnabled}
+                    className={cn(
+                      'w-full',
+                      visionEnabled ? 'border-warning/25 text-warning hover:bg-warning/10' : 'border-white/[0.10]'
+                    )}
+                    onClick={toggleVisionEnabled}
+                  >
+                    {savingVisionEnabled ? '...' : visionEnabled ? 'Disable AI tracking' : 'Enable AI tracking'}
+                  </Button>
+                </div>
+              </CardContent>
+            </GlassCard>
+          </div>
+        </BlurFade>
+      </div>
+
+      {/* Row 4: Todo & Onboarding */}
+      <BlurFade delay={0.35}>
+        <GlassCard>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListTodo className="size-5 text-primary" />
+              Todo & Onboarding
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <Button
+              variant="outline"
+              className="w-full border-white/[0.06] text-text-secondary hover:text-text-primary"
+              onClick={async () => {
+                try {
+                  await getNorotAPI().openTodoOverlay();
+                } catch { /* ignore */ }
+              }}
             >
-              <option value="calm_friend">calm_friend</option>
-              <option value="coach">coach</option>
-              <option value="tough_love">tough_love</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={toughLoveEnabled} onChange={(e) => setToughLoveEnabled(e.target.checked)} />
-            <span className="text-white/80">Enable tough love</span>
-          </label>
-        </div>
-      </div>
+              <Maximize2 className="size-4 mr-2" />
+              Pop out todo as floating window
+            </Button>
+            <Button
+              variant="outline"
+              className={cn(
+                'w-full',
+                autoShowTodoOverlay
+                  ? 'border-success/30 text-success hover:bg-success/10'
+                  : 'border-white/[0.06] text-text-secondary hover:text-text-primary',
+              )}
+              disabled={savingAutoShowTodo}
+              onClick={async () => {
+                setSavingAutoShowTodo(true);
+                try {
+                  const next = !autoShowTodoOverlay;
+                  setAutoShowTodoOverlay(next);
+                  await getNorotAPI().updateSettings({ autoShowTodoOverlay: next });
+                } catch { /* ignore */ }
+                finally { setSavingAutoShowTodo(false); }
+              }}
+            >
+              <ListTodo className="size-4 mr-2" />
+              {savingAutoShowTodo ? '...' : autoShowTodoOverlay ? 'Auto-show todo overlay: On' : 'Auto-show todo overlay: Off'}
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full border-warning/25 text-warning hover:bg-warning/10"
+              onClick={async () => {
+                try {
+                  const api = getNorotAPI();
+                  await api.updateSettings({ hasCompletedOnboarding: false });
+                  useSettingsStore.getState().setHasCompletedOnboarding(false);
+                } catch { /* ignore */ }
+              }}
+            >
+              <RotateCcw className="size-4 mr-2" />
+              Re-run onboarding
+            </Button>
+            <p className="text-[10px] text-text-muted text-center">
+              Re-running onboarding lets you reconfigure your focus profile and todos.
+            </p>
+          </CardContent>
+        </GlassCard>
+      </BlurFade>
 
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">Voice</div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <label className="text-sm">
-            <div className="text-white/60">ElevenLabs API key</div>
-            <input
-              value={elevenLabsApiKey}
-              onChange={(e) => setElevenLabsApiKey(e.target.value)}
-              className="mt-1 w-full rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
-              placeholder="xi-..."
-            />
-          </label>
-          <div className="text-sm">
-            <div className="text-white/60">Status</div>
-            <div className="mt-2 text-white/80">{hasElevenLabsKey ? 'configured' : 'missing key'}</div>
-          </div>
-          <label className="text-sm">
-            <div className="text-white/60">Coach agent ID</div>
-            <input
-              value={voiceAgentId}
-              onChange={(e) => setVoiceAgentId(e.target.value)}
-              className="mt-1 w-full rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
-              placeholder="agent_..."
-            />
-          </label>
-          <label className="text-sm">
-            <div className="text-white/60">Check-in agent ID</div>
-            <input
-              value={checkinAgentId}
-              onChange={(e) => setCheckinAgentId(e.target.value)}
-              className="mt-1 w-full rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
-              placeholder="agent_..."
-            />
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={muted} onChange={(e) => setMuted(e.target.checked)} />
-            <span className="text-white/80">Mute audio</span>
-          </label>
-        </div>
-      </div>
-
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">AI</div>
-        <label className="mt-3 block text-sm">
-          <div className="text-white/60">Gemini API key</div>
-          <input
-            value={geminiKey}
-            onChange={(e) => setGeminiKey(e.target.value)}
-            className="mt-1 w-full rounded border border-white/10 bg-black/20 px-3 py-2 outline-none focus:border-white/30"
-          />
-        </label>
-      </div>
-
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">Monitoring</div>
-        <div className="mt-3 flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={monitoringEnabled} onChange={(e) => setMonitoringEnabled(e.target.checked)} />
-            <span className="text-white/80">Enable monitoring</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={autoShowTodoOverlay} onChange={(e) => setAutoShowTodoOverlay(e.target.checked)} />
-            <span className="text-white/80">Auto show todo overlay</span>
-          </label>
-        </div>
-      </div>
-
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="text-sm text-white/70">Permissions</div>
-        <div className="mt-2 text-sm text-white/80">
-          Screen Recording: {permissions?.screenRecording ?? '—'} · Accessibility: {permissions?.accessibilityTrusted ? 'trusted' : 'not trusted'} · Window probe: {permissions?.canReadActiveWindow ? 'ok' : 'blocked'}
-        </div>
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            className="rounded bg-white/15 px-3 py-2 text-sm hover:bg-white/20"
-            onClick={() => void requestPermissions()}
-          >
-            Request permissions
-          </button>
-          <button
-            type="button"
-            className="rounded bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
-            onClick={() => void refreshPermissions()}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="rounded bg-white/15 px-4 py-2 text-sm hover:bg-white/20"
-          onClick={() => void save()}
-        >
-          Save settings
-        </button>
-        <button
-          type="button"
-          className="rounded bg-white/10 px-4 py-2 text-sm hover:bg-white/15"
-          onClick={() => void window.norot.invoke(IPC_CHANNELS.interventions.testIntervention)}
-        >
-          Test intervention
-        </button>
-      </div>
     </div>
-  )
+  );
 }
-

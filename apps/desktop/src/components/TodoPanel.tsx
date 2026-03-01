@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Maximize2, PanelRightClose } from 'lucide-react';
 import { TodoItemList } from '@/components/TodoItemList';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -55,12 +55,6 @@ export function TodoPanel({ open, onToggle }: TodoPanelProps) {
         ...(url ? { url } : {}),
       };
       await getNorotAPI().addTodo(newTodo);
-    } catch { /* ignore */ }
-  };
-
-  const handleUpdate = async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
-    try {
-      await getNorotAPI().updateTodo(id, fields);
     } catch { /* ignore */ }
   };
 
@@ -124,7 +118,6 @@ export function TodoPanel({ open, onToggle }: TodoPanelProps) {
                 onToggle={handleToggle}
                 onDelete={handleDelete}
                 onAdd={handleAdd}
-                onUpdate={handleUpdate}
               />
             </div>
           </ScrollArea>

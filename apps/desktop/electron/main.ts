@@ -1,180 +1,184 @@
-import { app, BrowserWindow, shell } from 'electron'
-import { join } from 'node:path'
+import { app, BrowserWindow, nativeImage } from 'electron';
+import path from 'path';
+import * as database from './database';
+import { registerIpcHandlers } from './ipc-handlers';
+import { startTelemetry, stopTelemetry } from './orchestrator';
+import { createTray, destroyTray } from './tray';
+import { IPC_CHANNELS } from './types';
+import {
+  setMainWindow,
+  getTodoWindow,
+  setTodoWindow,
+  getVoiceOrbWindow,
+  setVoiceOrbWindow,
+  createTodoOverlayWindow,
+  createVoiceOrbWindow,
+} from './window-manager';
 
-import { IPC_CHANNELS } from './types'
-import { registerIpcHandlers } from './ipc-handlers'
-import { LocalDatabase } from './database'
-import { TelemetryService } from './telemetry'
-import { Orchestrator } from './orchestrator'
-import type { CategoryRule, WorkOverride } from './database'
-import { TodoOverlayManager } from './todo-overlay'
-import { TrayManager } from './tray'
+let mainWindow: BrowserWindow | null = null;
+let isQuitting = false;
 
-let mainWindow: BrowserWindow | null = null
-let trayManager: TrayManager | null = null
-let isQuitting = false
-let focusDebounce: NodeJS.Timeout | null = null
-let db: LocalDatabase | null = null
-let telemetry: TelemetryService | null = null
-let orchestrator: Orchestrator | null = null
-let todoOverlay: TodoOverlayManager | null = null
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.setName('noRot');
 
-function toDateKey(date: Date): string {
-  const yyyy = String(date.getFullYear())
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const dd = String(date.getDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+function getArgValue(prefix: string): string | undefined {
+  const arg = process.argv.find((a) => a.startsWith(prefix));
+  if (!arg) return undefined;
+  return arg.slice(prefix.length) || undefined;
 }
 
-function getArgValue(prefix: string): string | null {
-  const match = process.argv.find(arg => arg.startsWith(prefix))
-  if (!match) return null
-  const [, value] = match.split('=', 2)
-  return value ?? null
+function resolveRendererUrl(): string | undefined {
+  const envUrl = process.env.ELECTRON_RENDERER_URL;
+  if (envUrl) return envUrl;
+
+  const argUrl = getArgValue('--renderer-url=');
+  if (argUrl) return argUrl;
+
+  return undefined;
 }
 
-function resolveRendererUrl(): string | null {
-  return (
-    getArgValue('--renderer-url')
-    ?? process.env.VITE_DEV_SERVER_URL
-    ?? process.env.ELECTRON_RENDERER_URL
-    ?? null
-  )
-}
-
-function createMainWindow(): BrowserWindow {
-  const window = new BrowserWindow({
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#0b0b10',
+    backgroundColor: '#0a0a0f',
+    icon: path.join(__dirname, '../../build/icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 12 } : undefined,
     webPreferences: {
-      preload: join(__dirname, '../preload/preload.js'),
+      preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
       backgroundThrottling: false,
-      autoplayPolicy: 'no-user-gesture-required'
-    }
-  })
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
 
-  window.webContents.setWindowOpenHandler((details) => {
-    void shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
-
-  const rendererUrl = resolveRendererUrl()
+  // Load renderer
+  const rendererUrl = resolveRendererUrl();
   if (rendererUrl) {
-    void window.loadURL(rendererUrl)
+    mainWindow.loadURL(rendererUrl);
   } else {
-    void window.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  window.on('close', (event) => {
-    if (isQuitting) return
-    event.preventDefault()
-    window.hide()
-  })
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[main] did-fail-load', { errorCode, errorDescription, validatedURL });
+  });
 
-  window.on('show', () => {
-    window.webContents.send(IPC_CHANNELS.window.shown, { shown: true })
-    window.webContents.invalidate()
-  })
-
-  const broadcastFocus = (isFocused: boolean) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(IPC_CHANNELS.window.focusChanged, { isFocused })
-    }
+  // macOS: hide window instead of closing so the app stays in the tray
+  if (process.platform === 'darwin') {
+    mainWindow.on('close', (e) => {
+      if (!isQuitting) {
+        e.preventDefault();
+        mainWindow?.hide();
+      }
+    });
   }
 
-  const scheduleFocusBroadcast = (isFocused: boolean) => {
-    if (focusDebounce) clearTimeout(focusDebounce)
-    focusDebounce = setTimeout(() => broadcastFocus(isFocused), 150)
-  }
+  // Notify renderer whenever the window becomes visible again.
+  // This is the only reliable signal in Electron (visibilitychange is dead
+  // because backgroundThrottling is false).
+  mainWindow.on('show', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    console.log('[main] window show event — sending IPC + invalidate');
+    mainWindow.webContents.invalidate();
+    mainWindow.webContents.send(IPC_CHANNELS.ON_WINDOW_SHOWN);
+  });
 
-  window.on('focus', () => scheduleFocusBroadcast(true))
-  window.on('blur', () => scheduleFocusBroadcast(false))
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    setMainWindow(null);
+  });
 
-  return window
+  setMainWindow(mainWindow);
 }
 
-app.on('before-quit', () => {
-  isQuitting = true
-})
-
 app.whenReady().then(() => {
-  const openedDb = LocalDatabase.open()
-  db = openedDb
-  mainWindow = createMainWindow()
-
-  telemetry = new TelemetryService({
-    getRules: () => (openedDb.getSetting<CategoryRule[]>('categoryRules') ?? []),
-    getWorkOverrides: () => (openedDb.getSetting<WorkOverride[]>('workOverrides') ?? [])
-  })
-
-  trayManager = new TrayManager(mainWindow)
-
-  orchestrator = new Orchestrator({ db: openedDb, telemetry, mainWindow, tray: trayManager })
-  orchestrator.start()
-
-  todoOverlay = new TodoOverlayManager(resolveRendererUrl)
-  registerIpcHandlers({ mainWindow, db: openedDb, telemetry, orchestrator, todoOverlay })
-
-  if (orchestrator.shouldAutoStartTelemetry()) {
-    orchestrator.startTelemetry()
-  }
-
-  const shouldAutoCreateOverlay = () => {
-    const onboarding = openedDb.getSetting<boolean>('onboardingComplete')
-    const daily = openedDb.getSetting<string | null>('dailySetupDate')
-    const autoShow = openedDb.getSetting<boolean>('autoShowTodoOverlay')
-    const today = toDateKey(new Date())
-    return onboarding && daily === today && autoShow !== false
-  }
-
-  if (shouldAutoCreateOverlay()) {
-    todoOverlay.ensureCreated()
-  }
-
-  mainWindow.on('focus', () => todoOverlay?.hide())
-  mainWindow.on('blur', () => {
-    if (openedDb.getSetting<boolean>('autoShowTodoOverlay') !== false) {
-      todoOverlay?.show()
+  // Dev builds run inside Electron.app, so set the Dock icon explicitly.
+  if (process.platform === 'darwin' && app.dock) {
+    try {
+      const iconPath = path.join(__dirname, '../../build/icon-macos.png');
+      const icon = nativeImage.createFromPath(iconPath);
+      if (!icon.isEmpty()) app.dock.setIcon(icon);
+    } catch {
+      // ignore
     }
-  })
+  }
 
+  // Initialize database before anything else
+  database.initDatabase();
+
+  // Register all IPC handlers
+  registerIpcHandlers();
+
+  // Create the main window
+  createWindow();
+
+  // Create system tray icon
+  if (mainWindow) {
+    createTray(mainWindow);
+  }
+
+  // Only start telemetry if user has completed onboarding
+  const settings = database.getSettings();
+  if (settings.hasCompletedOnboarding) {
+    console.log('[main] Onboarding complete — starting telemetry');
+    startTelemetry();
+  } else {
+    console.log('[main] Onboarding incomplete — telemetry will NOT start until onboarding is finished');
+  }
+
+  // Create voice orb overlay after main window loads
+  mainWindow.webContents.on('did-finish-load', () => {
+    createVoiceOrbWindow();
+  });
+
+  // Auto-show todo overlay if user had it open last session
+  if (settings.autoShowTodoOverlay) {
+    createTodoOverlayWindow();
+  }
+
+  // macOS: show existing window or re-create when dock icon is clicked
   app.on('activate', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show()
-      return
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.invalidate();
+    } else if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
     }
-    mainWindow = createMainWindow()
-    if (trayManager) {
-      trayManager.destroy()
-      trayManager = null
-    }
-    trayManager = new TrayManager(mainWindow)
-    if (!db) {
-      db = LocalDatabase.open()
-    }
-    if (!telemetry) {
-      telemetry = new TelemetryService({
-        getRules: () => (db?.getSetting<CategoryRule[]>('categoryRules') ?? []),
-        getWorkOverrides: () => (db?.getSetting<WorkOverride[]>('workOverrides') ?? [])
-      })
-    }
-    if (!orchestrator && telemetry) {
-      orchestrator = new Orchestrator({ db, telemetry, mainWindow, tray: trayManager })
-      orchestrator.start()
-    }
-    if (!todoOverlay) {
-      todoOverlay = new TodoOverlayManager(resolveRendererUrl)
-    }
-    registerIpcHandlers({ mainWindow, db, telemetry: telemetry!, orchestrator: orchestrator!, todoOverlay })
-  })
-})
+  });
+});
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+
+  // Close voice orb overlay window
+  const voiceOrbWin = getVoiceOrbWindow();
+  if (voiceOrbWin && !voiceOrbWin.isDestroyed()) {
+    voiceOrbWin.destroy();
+    setVoiceOrbWindow(null);
+  }
+
+  // Close todo overlay window if open
+  const todoWin = getTodoWindow();
+  if (todoWin && !todoWin.isDestroyed()) {
+    todoWin.destroy();
+    setTodoWindow(null);
+  }
+
+  destroyTray();
+  stopTelemetry();
+  database.closeDatabase();
+});

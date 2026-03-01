@@ -1,40 +1,44 @@
 import { resolve } from 'path'
-import { defineConfig } from 'electron-vite'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
+    plugins: [externalizeDepsPlugin()],
     build: {
+      outDir: 'out/main',
       lib: {
-        entry: resolve('electron/main.ts')
+        entry: resolve('electron/main.ts'),
       },
-      externalizeDeps: true,
-      rollupOptions: {
-        external: ['better-sqlite3', 'get-windows']
-      }
-    }
+    },
   },
   preload: {
+    plugins: [externalizeDepsPlugin()],
     build: {
+      outDir: 'out/preload',
       lib: {
-        entry: resolve('electron/preload.ts')
+        entry: resolve('electron/preload.ts'),
       },
-      externalizeDeps: true
-    }
+    },
   },
   renderer: {
-    root: resolve('src'),
+    publicDir: resolve('assets'),
+    plugins: [react(), tailwindcss()],
     build: {
+      outDir: 'out/renderer',
       rollupOptions: {
-        input: resolve('src/index.html')
-      }
+        input: {
+        index: resolve('src/index.html'),
+        'voice-orb': resolve('src/voice-orb.html'),
+      },
+      },
     },
     resolve: {
       alias: {
-        '@': resolve('src')
+        '@': resolve('src'),
       },
-      dedupe: ['react', 'react-dom']
     },
-    plugins: [react()]
-  }
+    root: resolve('src'),
+  },
 })

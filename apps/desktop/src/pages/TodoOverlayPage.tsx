@@ -1,96 +1,101 @@
-import { useEffect, useMemo, useState } from 'react'
-
-import { IPC_CHANNELS } from '../ipc-channels'
-import { useTodos } from '../hooks/useTodos'
-
-interface VoiceStatus {
-  speaking: boolean
-  amplitude: number
-  source: string
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function parseVoiceStatus(payload: unknown): VoiceStatus | null {
-  if (!isRecord(payload)) return null
-  const speaking = payload.speaking
-  const amplitude = payload.amplitude
-  const source = payload.source
-  if (typeof speaking !== 'boolean') return null
-  if (typeof amplitude !== 'number' || !Number.isFinite(amplitude)) return null
-  if (typeof source !== 'string') return null
-  return { speaking, amplitude, source }
-}
+import { useState, useEffect, useCallback } from 'react';
+import { X } from 'lucide-react';
+import { TodoItemList } from '@/components/TodoItemList';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { getNorotAPI } from '@/lib/norot-api';
+import { cn } from '@/lib/utils';
+import type { TodoItem } from '@norot/shared';
 
 export function TodoOverlayPage() {
-  const { todos } = useTodos()
-  const [voice, setVoice] = useState<VoiceStatus>({ speaking: false, amplitude: 0, source: 'none' })
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+
+  const loadTodos = useCallback(async () => {
+    try {
+      const items = await getNorotAPI().getTodos();
+      setTodos(items);
+    } catch { /* ignore */ }
+  }, []);
 
   useEffect(() => {
-    document.body.classList.remove('bg-black')
-    document.body.classList.add('bg-transparent')
+    // Make body transparent for Electron transparent window
+    document.documentElement.style.background = 'transparent';
+    document.body.style.background = 'transparent';
+
+    loadTodos();
+    const api = getNorotAPI();
+    const unsubTodos = api.onTodosUpdated((updated) => setTodos(updated));
+
     return () => {
-      document.body.classList.remove('bg-transparent')
-      document.body.classList.add('bg-black')
-    }
-  }, [])
+      unsubTodos();
+    };
+  }, [loadTodos]);
 
-  useEffect(() => {
-    const off = window.norot.on(IPC_CHANNELS.voice.statusBroadcast, (payload) => {
-      const next = parseVoiceStatus(payload)
-      if (next) setVoice(next)
-    })
-    return () => off()
-  }, [])
+  const handleToggle = async (id: string) => {
+    try { await getNorotAPI().toggleTodo(id); } catch { /* ignore */ }
+  };
 
-  const scale = useMemo(() => 1 + Math.max(0, Math.min(1, voice.amplitude)) * 0.4, [voice.amplitude])
+  const handleDelete = async (id: string) => {
+    try { await getNorotAPI().deleteTodo(id); } catch { /* ignore */ }
+  };
+
+  const handleAdd = async (text: string, app?: string, url?: string) => {
+    try {
+      const newTodo: TodoItem = {
+        id: crypto.randomUUID(),
+        text,
+        done: false,
+        order: todos.length,
+        ...(app ? { app } : {}),
+        ...(url ? { url } : {}),
+      };
+      await getNorotAPI().addTodo(newTodo);
+    } catch { /* ignore */ }
+  };
+
+  const handleClose = async () => {
+    try { await getNorotAPI().closeTodoOverlay(); } catch { /* ignore */ }
+  };
 
   return (
-    <div className="h-screen w-screen select-none p-4 text-white">
-      <div className="rounded-xl border border-white/10 bg-black/30 p-4 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Todos</div>
-          <div className="flex items-center gap-3">
-            <div className="text-xs text-white/70">{voice.speaking ? 'speaking' : 'idle'}</div>
-            <div
-              className="h-3 w-3 rounded-full bg-white/80"
-              style={{ transform: `scale(${scale})`, transition: 'transform 120ms linear' }}
-              title={voice.source}
+    <div className="dark">
+      <div
+        className={cn(
+          'flex flex-col h-screen w-screen overflow-hidden',
+          'bg-[rgba(9,9,11,0.85)] backdrop-blur-[20px] rounded-xl',
+        )}
+      >
+        {/* Drag bar */}
+        <div
+          className="h-8 shrink-0 flex items-center justify-between px-3"
+          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        >
+          <span className="text-xs font-medium text-text-secondary">Todo</span>
+          <button
+            onClick={handleClose}
+            className={cn(
+              'w-5 h-5 rounded flex items-center justify-center',
+              'text-text-muted hover:text-text-primary hover:bg-white/[0.06]',
+              'transition-colors duration-200',
+            )}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+
+        {/* Todo list */}
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="px-3 pb-3">
+            <TodoItemList
+              todos={todos}
+              onToggle={handleToggle}
+              onDelete={handleDelete}
+              onAdd={handleAdd}
             />
           </div>
-        </div>
+        </ScrollArea>
 
-        <ul className="mt-3 space-y-2">
-          {todos.filter(t => !t.done).slice(0, 12).map(t => (
-            <li key={t.id} className="rounded bg-white/5 px-3 py-2 text-sm">
-              {t.text}
-            </li>
-          ))}
-          {todos.filter(t => !t.done).length === 0 ? (
-            <li className="text-sm text-white/60">No pending todos.</li>
-          ) : null}
-        </ul>
-
-        <div className="mt-4 flex gap-2">
-          <button
-            type="button"
-            className="rounded bg-white/10 px-3 py-2 text-xs hover:bg-white/15"
-            onClick={() => void window.norot.invoke(IPC_CHANNELS.voice.openVoiceChat, { mode: 'coach' })}
-          >
-            Open voice chat
-          </button>
-          <button
-            type="button"
-            className="rounded bg-white/10 px-3 py-2 text-xs hover:bg-white/15"
-            onClick={() => void window.norot.invoke(IPC_CHANNELS.todoOverlay.close)}
-          >
-            Hide
-          </button>
-        </div>
       </div>
     </div>
-  )
+  );
 }
-

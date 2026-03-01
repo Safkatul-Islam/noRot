@@ -1,14 +1,10 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, screen } from 'electron';
 import path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
 let todoWindow: BrowserWindow | null = null;
-let todoDragging = false;
-let todoDraggingTimer: ReturnType<typeof setTimeout> | null = null;
+let voiceOrbWindow: BrowserWindow | null = null;
 
-export function isTodoDragging(): boolean {
-  return todoDragging;
-}
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
 }
@@ -25,8 +21,92 @@ export function setTodoWindow(win: BrowserWindow | null): void {
   todoWindow = win;
 }
 
+export function getVoiceOrbWindow(): BrowserWindow | null {
+  return voiceOrbWindow;
+}
+
+export function setVoiceOrbWindow(win: BrowserWindow | null): void {
+  voiceOrbWindow = win;
+}
+
+export function createVoiceOrbWindow(): void {
+  if (voiceOrbWindow && !voiceOrbWindow.isDestroyed()) return;
+
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+
+  const winWidth = 160;
+  const winHeight = 160;
+  const x = Math.round((width - winWidth) / 2);
+  const y = height - winHeight - 20;
+
+  voiceOrbWindow = new BrowserWindow({
+    width: winWidth,
+    height: winHeight,
+    x,
+    y,
+    show: false,
+    alwaysOnTop: true,
+    frame: false,
+    transparent: true,
+    // Use explicit transparent RGBA to avoid hex alpha ambiguities.
+    // Source: Context7 - /electron/electron docs - "win.setBackgroundColor()"
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+    hasShadow: false,
+    roundedCorners: false,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    movable: true,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      devTools: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  // macOS: reinforce transparent compositing (some builds ignore constructor backgroundColor).
+  // Source: Context7 - /electron/electron docs - "win.setBackgroundColor()"
+  voiceOrbWindow.setBackgroundColor('rgba(0, 0, 0, 0)');
+
+  voiceOrbWindow.setAlwaysOnTop(true, 'floating');
+  if (process.platform === 'darwin') {
+    voiceOrbWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
+  voiceOrbWindow.setIgnoreMouseEvents(false);
+
+  // Safety net: inject transparent CSS before page renders
+  voiceOrbWindow.webContents.on('dom-ready', () => {
+    voiceOrbWindow?.webContents.insertCSS(
+      'html,body,#root,canvas{background:transparent!important}'
+    );
+  });
+
+  // Show window only after content is fully loaded (prevents white flash)
+  // and force macOS to recompute compositing for transparent content
+  voiceOrbWindow.webContents.on('did-finish-load', () => {
+    voiceOrbWindow?.invalidateShadow();
+    voiceOrbWindow?.setBackgroundColor('rgba(0, 0, 0, 0)');
+    voiceOrbWindow?.show();
+  });
+
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl) {
+    voiceOrbWindow.loadURL(`${rendererUrl}/voice-orb.html`);
+  } else {
+    voiceOrbWindow.loadFile(path.join(__dirname, '../renderer/voice-orb.html'));
+  }
+
+  voiceOrbWindow.on('closed', () => {
+    voiceOrbWindow = null;
+  });
+}
+
 export function createTodoOverlayWindow(): void {
   if (todoWindow && !todoWindow.isDestroyed()) {
+    todoWindow.focus();
     return;
   }
 
@@ -34,11 +114,8 @@ export function createTodoOverlayWindow(): void {
     width: 320,
     height: 480,
     minWidth: 280,
-    minHeight: 400,
-    show: false,
+    minHeight: 320,
     alwaysOnTop: true,
-    // Must be focusable so clicks/drag inside the overlay don't force-focus the main window.
-    focusable: true,
     frame: false,
     transparent: true,
     backgroundColor: '#00ffffff',
@@ -50,25 +127,7 @@ export function createTodoOverlayWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      backgroundThrottling: false,
     },
-  });
-
-  // Track manual dragging so focus sync logic doesn't hide mid-drag.
-  todoWindow.on('will-move', () => {
-    todoDragging = true;
-    if (todoDraggingTimer) {
-      clearTimeout(todoDraggingTimer);
-      todoDraggingTimer = null;
-    }
-  });
-
-  todoWindow.on('moved', () => {
-    if (todoDraggingTimer) clearTimeout(todoDraggingTimer);
-    todoDraggingTimer = setTimeout(() => {
-      todoDragging = false;
-      todoDraggingTimer = null;
-    }, 300);
   });
 
   // Keep above other windows including fullscreen apps
@@ -83,11 +142,6 @@ export function createTodoOverlayWindow(): void {
   }
 
   todoWindow.on('closed', () => {
-    todoDragging = false;
-    if (todoDraggingTimer) {
-      clearTimeout(todoDraggingTimer);
-      todoDraggingTimer = null;
-    }
     todoWindow = null;
   });
 }

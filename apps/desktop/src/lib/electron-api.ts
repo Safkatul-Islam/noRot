@@ -1,4 +1,4 @@
-import type { ScoreResponse, InterventionEvent, TodoItem, WinsData, TTSSettings } from '@norot/shared';
+import type { ScoreResponse, InterventionEvent, TodoItem } from '@norot/shared';
 
 export interface CategoryRule {
   id: string;
@@ -9,7 +9,6 @@ export interface CategoryRule {
 
 export interface UserSettings {
   persona: 'calm_friend' | 'coach' | 'tough_love';
-  toughLoveExplicitAllowed: boolean;
   scoreThreshold: number;
   cooldownSeconds: number;
   apiUrl: string;
@@ -23,12 +22,6 @@ export interface UserSettings {
   hasCompletedOnboarding: boolean;
   userName: string;
   autoShowTodoOverlay: boolean;
-  timeFormat: '12h' | '24h';
-  timeZone: string;
-  lastDailySetupDate: string;
-  elevenLabsAgentId: string;
-  elevenLabsAgentPersona: string;
-  monitoringEnabled: boolean;
 }
 
 export interface UsageHistoryPoint {
@@ -39,7 +32,6 @@ export interface UsageHistoryPoint {
 
 export interface AppStats {
   appName: string;
-  domain?: string;
   category: string;
   totalSeconds: number;
   lastSeen: string;
@@ -59,9 +51,9 @@ export interface NoRotAPI {
   onIntervention(callback: (event: InterventionEvent) => void): () => void;
   onInterventionDismiss(callback: (data: { interventionId: string }) => void): () => void;
   testIntervention(): Promise<InterventionEvent>;
+  getHistory(limit?: number): Promise<ScoreResponse[]>;
   getUsageHistory(): Promise<UsageHistoryPoint[]>;
   getAppStats(minutes?: number): Promise<AppStats[]>;
-  getWins(): Promise<WinsData>;
   getSettings(): Promise<UserSettings>;
   updateSettings(settings: Partial<UserSettings>): Promise<void>;
 
@@ -83,42 +75,21 @@ export interface NoRotAPI {
   onChatError(callback: (error: string) => void): () => void;
 
   // Todos
-  extractTodos(transcript: string): Promise<TodoItem[]>;
   getTodos(): Promise<TodoItem[]>;
   addTodo(item: TodoItem): Promise<void>;
   toggleTodo(id: string): Promise<void>;
   deleteTodo(id: string): Promise<void>;
-  updateTodo(id: string, fields: Partial<Omit<TodoItem, 'id'>>): Promise<void>;
   reorderTodos(id: string, newOrder: number): Promise<void>;
   setTodos(items: TodoItem[]): Promise<void>;
-  appendTodos(items: TodoItem[]): Promise<void>;
   onTodosUpdated(callback: (todos: TodoItem[]) => void): () => void;
 
   // Todo overlay
   openTodoOverlay(): Promise<void>;
   closeTodoOverlay(): Promise<void>;
-  isTodoOverlayOpen(): Promise<boolean>;
-
-  // App focus tracking
-  onAppFocusChanged(callback: (data: { focused: boolean }) => void): () => void;
 
   // Voice status broadcast (for overlay VoiceOrb)
-  broadcastVoiceStatus(isSpeaking: boolean, severity: number, amplitude: number, lastWordBoundaryAt: number): void;
-  onVoiceStatus(callback: (data: { isSpeaking: boolean; severity: number; amplitude: number; lastWordBoundaryAt: number }) => void): () => void;
-
-  // Voice agent
-  ensureVoiceAgent(): Promise<{ agentId: string; signedUrl: string }>;
-
-  // Check-in agent (severity 3+ voice conversations)
-  ensureCheckinAgent(): Promise<{ agentId: string; signedUrl: string }>;
-
-  // Voice chat
-  openVoiceChat(): void;
-  onVoiceChatOpen(callback: () => void): () => void;
-  hasElevenLabsKey(): Promise<boolean>;
-
-  // ElevenLabs TTS via main process (avoids renderer CORS)
-  synthesizeElevenLabsTts?(text: string, voiceId: string, tts: TTSSettings): Promise<string>;
+  broadcastVoiceStatus(isSpeaking: boolean, severity: number, amplitude: number): void;
+  onVoiceStatus(callback: (data: { isSpeaking: boolean; severity: number; amplitude: number }) => void): () => void;
 }
 
 declare global {
@@ -128,4 +99,4 @@ declare global {
 }
 
 export const norotAPI: NoRotAPI = window.norot;
-export type { ScoreResponse, InterventionEvent, TodoItem, WinsData };
+export type { ScoreResponse, InterventionEvent, TodoItem };

@@ -1,101 +1,174 @@
-import { app, BrowserWindow, Menu, nativeImage, Tray } from 'electron'
+import { Tray, Menu, nativeImage, app, BrowserWindow } from 'electron';
+import type { Severity } from '@norot/shared';
 
-import { SEVERITY_BANDS } from '@norot/shared'
-import type { ActiveCategory, Severity } from '@norot/shared'
+// Color per severity state
+const SEVERITY_COLORS: Record<Severity, string> = {
+  0: '#22c55e', // Focused — green
+  1: '#eab308', // Drifting — yellow
+  2: '#f97316', // Distracted — orange
+  3: '#ef4444', // Procrastinating — red
+  4: '#a855f7', // Crisis — purple
+};
+
+const SEVERITY_LABELS: Record<Severity, string> = {
+  0: 'Focused',
+  1: 'Drifting',
+  2: 'Distracted',
+  3: 'Procrastinating',
+  4: 'Crisis',
+};
+
+const INACTIVE_COLOR = '#6b7280';
 
 export interface TrayState {
-  paused: boolean
-  severity: Severity
-  activeApp: string | null
-  activeDomain: string | null
-  activeCategory: ActiveCategory | null
+  score: number;
+  severity: Severity;
+  activeApp: string;
+  activeCategory: string;
+  activeDomain?: string;
+  telemetryActive: boolean;
 }
 
-const COLOR_MAP: Record<string, string> = {
-  green: '#22c55e',
-  yellow: '#eab308',
-  orange: '#f97316',
-  red: '#ef4444',
-  purple: '#a855f7'
-} as const
+let tray: Tray | null = null;
+let mainWindow: BrowserWindow | null = null;
+let currentState: TrayState = {
+  score: 0,
+  severity: 0,
+  activeApp: '',
+  activeCategory: '',
+  telemetryActive: false,
+};
 
-const PAUSED_COLOR = '#9ca3af'
+/**
+ * Draw a 16x16 colored circle as a PNG buffer using raw RGBA pixel data.
+ * No Canvas dependency — just math and a minimal PNG encoder.
+ */
+function createCircleIcon(hexColor: string): Electron.NativeImage {
+  const size = 16;
+  // @2x for Retina displays
+  const scale = 2;
+  const px = size * scale;
+  const r = parseInt(hexColor.slice(1, 3), 16);
+  const g = parseInt(hexColor.slice(3, 5), 16);
+  const b = parseInt(hexColor.slice(5, 7), 16);
 
-export class TrayManager {
-  private readonly tray: Tray
-  private readonly window: BrowserWindow
-  private state: TrayState = { paused: true, severity: 0, activeApp: null, activeDomain: null, activeCategory: null }
+  // Create RGBA buffer
+  const buf = Buffer.alloc(px * px * 4);
+  const center = px / 2;
+  const radius = center - 1;
 
-  constructor(window: BrowserWindow) {
-    this.window = window
-    this.tray = new Tray(nativeImage.createEmpty())
-    this.tray.setToolTip('noRot')
-    this.tray.on('click', () => this.toggleWindow())
-    this.render()
-  }
+  for (let y = 0; y < px; y++) {
+    for (let x = 0; x < px; x++) {
+      const dx = x - center + 0.5;
+      const dy = y - center + 0.5;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const offset = (y * px + x) * 4;
 
-  update(next: Partial<TrayState>): void {
-    this.state = { ...this.state, ...next }
-    this.render()
-  }
-
-  destroy(): void {
-    this.tray.destroy()
-  }
-
-  private toggleWindow(): void {
-    if (this.window.isDestroyed()) return
-    if (this.window.isVisible()) this.window.hide()
-    else this.window.show()
-    this.render()
-  }
-
-  private render(): void {
-    const icon = this.renderIcon()
-    this.tray.setImage(icon)
-    this.tray.setContextMenu(this.renderMenu())
-  }
-
-  private renderIcon() {
-    const band = SEVERITY_BANDS.find(b => b.severity === this.state.severity) ?? SEVERITY_BANDS[0]
-    const color = this.state.paused ? PAUSED_COLOR : (COLOR_MAP[band.color] ?? PAUSED_COLOR)
-
-    const svg = [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`,
-      `<circle cx="16" cy="16" r="10" fill="${color}"/>`,
-      `</svg>`
-    ].join('')
-
-    const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
-    const image = nativeImage.createFromDataURL(dataUrl)
-    if (process.platform === 'darwin') {
-      return image.resize({ width: 16, height: 16 })
-    }
-    return image
-  }
-
-  private renderMenu(): Menu {
-    const band = SEVERITY_BANDS.find(b => b.severity === this.state.severity) ?? SEVERITY_BANDS[0]
-    const statusLabel = this.state.paused ? 'Paused' : band.label
-
-    const domain = this.state.activeDomain ? ` — ${this.state.activeDomain}` : ''
-    const category = this.state.activeCategory ? ` (${this.state.activeCategory})` : ''
-    const appLine = this.state.activeApp ? `${this.state.activeApp}${domain}${category}` : 'No active window'
-
-    const showHideLabel = this.window.isVisible() ? 'Hide noRot' : 'Show noRot'
-
-    return Menu.buildFromTemplate([
-      { label: `Status: ${statusLabel}`, enabled: false },
-      { label: appLine, enabled: false },
-      { type: 'separator' },
-      { label: showHideLabel, click: () => this.toggleWindow() },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          app.quit()
-        }
+      if (dist <= radius) {
+        // Anti-alias the edge
+        const alpha = dist > radius - 1 ? Math.round((radius - dist) * 255) : 255;
+        buf[offset] = r;
+        buf[offset + 1] = g;
+        buf[offset + 2] = b;
+        buf[offset + 3] = alpha;
+      } else {
+        // Transparent
+        buf[offset + 3] = 0;
       }
-    ])
+    }
+  }
+
+  return nativeImage.createFromBuffer(buf, {
+    width: px,
+    height: px,
+    scaleFactor: scale,
+  });
+}
+
+function buildContextMenu(): Menu {
+  const { score, severity, activeApp, activeCategory, telemetryActive } = currentState;
+  const win = mainWindow;
+  const isVisible = win && !win.isDestroyed() && win.isVisible();
+
+  const statusLabel = telemetryActive
+    ? `${SEVERITY_LABELS[severity]} — Focus: ${100 - score}`
+    : 'Monitoring paused';
+
+  const items: Electron.MenuItemConstructorOptions[] = [
+    { label: statusLabel, enabled: false },
+    { type: 'separator' },
+  ];
+
+  if (telemetryActive && activeApp) {
+    const domainSuffix = currentState.activeDomain
+      ? ` [${currentState.activeDomain}]`
+      : '';
+    items.push(
+      { label: `${activeApp}${domainSuffix} (${activeCategory})`, enabled: false },
+      { type: 'separator' },
+    );
+  }
+
+  items.push(
+    {
+      label: isVisible ? 'Hide noRot' : 'Show noRot',
+      click: () => {
+        if (!win || win.isDestroyed()) return;
+        if (win.isVisible()) {
+          win.hide();
+        } else {
+          win.show();
+          win.focus();
+          win.webContents.invalidate();
+        }
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit noRot',
+      click: () => {
+        app.quit();
+      },
+    },
+  );
+
+  return Menu.buildFromTemplate(items);
+}
+
+export function createTray(window: BrowserWindow): void {
+  mainWindow = window;
+
+  // Start with inactive (gray) icon
+  const icon = createCircleIcon(INACTIVE_COLOR);
+  // On macOS, setting the image as a "template" would make it monochrome.
+  // We want actual colors, so we pass the image directly.
+  tray = new Tray(icon);
+  tray.setToolTip('noRot');
+  tray.setContextMenu(buildContextMenu());
+}
+
+export function updateTrayState(data: TrayState): void {
+  if (!tray) return;
+
+  currentState = data;
+
+  // Pick color based on telemetry status
+  const color = data.telemetryActive
+    ? SEVERITY_COLORS[data.severity]
+    : INACTIVE_COLOR;
+
+  tray.setImage(createCircleIcon(color));
+  tray.setContextMenu(buildContextMenu());
+
+  const tooltip = data.telemetryActive
+    ? `noRot — ${SEVERITY_LABELS[data.severity]} (Focus: ${100 - data.score})`
+    : 'noRot — Paused';
+  tray.setToolTip(tooltip);
+}
+
+export function destroyTray(): void {
+  if (tray) {
+    tray.destroy();
+    tray = null;
   }
 }

@@ -8,30 +8,6 @@ import type { TodoItem } from '@norot/shared';
 
 let mockTodos: TodoItem[] = [];
 let todoListeners: Array<(todos: TodoItem[]) => void> = [];
-let mockSettings: Record<string, unknown> = {
-  persona: 'calm_friend',
-  toughLoveExplicitAllowed: false,
-  scoreThreshold: 35,
-  cooldownSeconds: 180,
-  apiUrl: 'http://127.0.0.1:8000',
-  elevenLabsApiKey: '',
-  geminiApiKey: '',
-  muted: false,
-  ttsEngine: 'auto',
-  scriptSource: 'default',
-  visionEnabled: true,
-  categoryRules: [],
-  hasCompletedOnboarding: false,
-  userName: '',
-  autoShowTodoOverlay: true,
-  timeFormat: '12h',
-  timeZone: 'system',
-  lastDailySetupDate: '',
-  elevenLabsAgentId: '',
-  elevenLabsAgentPersona: '',
-  elevenLabsAgentVersion: 0,
-  monitoringEnabled: true,
-};
 
 function broadcastTodos() {
   for (const cb of todoListeners) cb([...mockTodos]);
@@ -64,18 +40,26 @@ export const mockNorotAPI: NoRotAPI = {
     userResponse: 'pending' as const,
     audioPlayed: false,
   }),
+  getHistory: async () => [],
   getUsageHistory: async () => [],
-  getAppStats: async () => [
-    { appName: 'VS Code', category: 'productive', totalSeconds: 7200, lastSeen: new Date().toISOString() },
-    { appName: 'Chrome', category: 'neutral', totalSeconds: 5400, lastSeen: new Date().toISOString() },
-    { appName: 'Terminal', category: 'productive', totalSeconds: 3600, lastSeen: new Date().toISOString() },
-    { appName: 'Slack', category: 'social', totalSeconds: 1800, lastSeen: new Date().toISOString() },
-  ],
-  getWins: async () => ({ refocusCount: 3, totalFocusedMinutes: 47 }),
-  getSettings: async () => ({ ...mockSettings } as any),
-  updateSettings: async (settings: Record<string, unknown>) => {
-    Object.assign(mockSettings, settings);
-  },
+  getAppStats: async () => [],
+  getSettings: async () => ({
+    persona: 'calm_friend',
+    scoreThreshold: 35,
+    cooldownSeconds: 180,
+    apiUrl: 'http://127.0.0.1:8000',
+    elevenLabsApiKey: '',
+    geminiApiKey: '',
+    muted: false,
+    ttsEngine: 'auto',
+    scriptSource: 'default',
+    visionEnabled: true,
+    categoryRules: [],
+    hasCompletedOnboarding: false,
+    userName: '',
+    autoShowTodoOverlay: true,
+  }),
+  updateSettings: async () => {},
 
   reportAudioPlayed: async () => {},
   onPlayAudio: () => () => {},
@@ -119,25 +103,6 @@ export const mockNorotAPI: NoRotAPI = {
   },
 
   // Todos — in-memory CRUD
-  extractTodos: async (_transcript: string) => [
-    {
-      id: 'mock-todo-1',
-      text: 'Review pull request on GitHub',
-      done: false,
-      order: 0,
-      app: 'Chrome',
-      url: 'github.com',
-      allowedApps: ['Chrome', 'VS Code', 'Terminal'],
-    },
-    {
-      id: 'mock-todo-2',
-      text: 'Write unit tests for auth module',
-      done: false,
-      order: 1,
-      app: 'VS Code',
-      allowedApps: ['VS Code', 'Terminal', 'Chrome'],
-    },
-  ] as TodoItem[],
   getTodos: async () => [...mockTodos],
   addTodo: async (item: TodoItem) => {
     mockTodos.push(item);
@@ -152,42 +117,6 @@ export const mockNorotAPI: NoRotAPI = {
     mockTodos = mockTodos.filter((t) => t.id !== id);
     broadcastTodos();
   },
-  updateTodo: async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
-    const todo = mockTodos.find((t) => t.id === id);
-    if (!todo) return;
-
-    if (typeof fields.text === 'string' && fields.text.trim()) {
-      todo.text = fields.text;
-    }
-    if (typeof fields.done === 'boolean') {
-      todo.done = fields.done;
-    }
-    if (typeof fields.order === 'number') {
-      todo.order = fields.order;
-    }
-
-    if ('app' in fields) {
-      const app = typeof fields.app === 'string' ? fields.app.trim() : '';
-      if (app) todo.app = app;
-      else delete (todo as Partial<TodoItem>).app;
-    }
-    if ('url' in fields) {
-      const url = typeof fields.url === 'string' ? fields.url.trim() : '';
-      if (url) todo.url = url;
-      else delete (todo as Partial<TodoItem>).url;
-    }
-    if ('allowedApps' in fields) {
-      if (Array.isArray(fields.allowedApps)) todo.allowedApps = fields.allowedApps;
-      else delete (todo as Partial<TodoItem>).allowedApps;
-    }
-    if ('deadline' in fields) {
-      const deadline = typeof fields.deadline === 'string' ? fields.deadline.trim() : '';
-      if (deadline) todo.deadline = deadline;
-      else delete (todo as Partial<TodoItem>).deadline;
-    }
-
-    broadcastTodos();
-  },
   reorderTodos: async (id: string, newOrder: number) => {
     const idx = mockTodos.findIndex((t) => t.id === id);
     if (idx === -1) return;
@@ -200,10 +129,6 @@ export const mockNorotAPI: NoRotAPI = {
     mockTodos = [...items];
     broadcastTodos();
   },
-  appendTodos: async (items: TodoItem[]) => {
-    mockTodos.push(...items);
-    broadcastTodos();
-  },
   onTodosUpdated: (callback: (todos: TodoItem[]) => void) => {
     todoListeners.push(callback);
     return () => {
@@ -214,28 +139,10 @@ export const mockNorotAPI: NoRotAPI = {
   // Todo overlay — no-op in browser
   openTodoOverlay: async () => {},
   closeTodoOverlay: async () => {},
-  isTodoOverlayOpen: async () => false,
-
-  // App focus tracking — no-op in browser
-  onAppFocusChanged: () => () => {},
 
   // Voice status broadcast — no-op in browser
-  broadcastVoiceStatus: (_isSpeaking: boolean, _severity: number, _amplitude: number, _lastWordBoundaryAt: number) => {},
+  broadcastVoiceStatus: (_isSpeaking: boolean, _severity: number, _amplitude: number) => {},
   onVoiceStatus: () => () => {},
-
-  // Voice agent — not available in browser dev, throw structured error
-  ensureVoiceAgent: async () => { throw new Error(JSON.stringify({ code: 'NETWORK', message: 'Voice is not available in browser dev mode.', canRetry: false })); },
-
-  // Check-in agent — not available in browser dev, throw structured error
-  ensureCheckinAgent: async () => { throw new Error(JSON.stringify({ code: 'NETWORK', message: 'Voice check-in is not available in browser dev mode.', canRetry: false })); },
-
-  // Voice chat — no-op in browser
-  openVoiceChat: () => { console.log('[mock] openVoiceChat'); },
-  onVoiceChatOpen: () => () => {},
-  hasElevenLabsKey: async () => false,
-  synthesizeElevenLabsTts: async () => {
-    throw new Error('Not supported outside Electron');
-  },
 };
 
 // Chat listener arrays
