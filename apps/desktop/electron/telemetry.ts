@@ -4,6 +4,7 @@ import type { CategoryRule } from './types';
 import { classifyApp, extractDomain, isBrowser } from './window-classifier';
 import { createActivityClassifier, type ActivityClassification, type VisionProgress } from './activity/activity-classifier';
 import { checkContextRelevance, type ContextResult } from './context-checker';
+import { tryGetActiveBrowserUrl } from './browser-url';
 
 // Cached dynamic import for ESM-only get-windows
 let getActiveWindow: (() => Promise<any>) | null = null;
@@ -74,6 +75,10 @@ export function createTelemetryCollector(
   const VISION_REFRESH_MS = 5_000;
   let visionProgressKey = '';
   let visionProgress: VisionProgress | null = null;
+  let lastBrowserUrlLookupAt = 0;
+  let lastBrowserUrlLookupKey = '';
+  let lastBrowserUrlLookupValue: string | undefined;
+  const BROWSER_URL_THROTTLE_MS = 2_500;
 
   // Context-aware override (non-blocking Gemini check)
   let lastContextResult: ContextResult | null = null;
@@ -216,6 +221,25 @@ export function createTelemetryCollector(
       switchTimestamps.push(now);
     }
     lastAppName = appName;
+
+    // "Deep" browser classification: if we don't have a URL from the window tracker, ask the browser directly.
+    // This lets us reliably classify Chrome/Safari/etc by domain (youtube.com, instagram.com, etc.).
+    if (isBrowser(appName)) {
+      const domainFromWindow = extractDomain(windowUrl, windowTitle);
+      if (!domainFromWindow) {
+        const lookupKey = `${appName}|${windowTitle ?? ''}`;
+        const throttled =
+          lookupKey === lastBrowserUrlLookupKey && now - lastBrowserUrlLookupAt < BROWSER_URL_THROTTLE_MS;
+        if (!throttled) {
+          lastBrowserUrlLookupAt = now;
+          lastBrowserUrlLookupKey = lookupKey;
+          lastBrowserUrlLookupValue = await tryGetActiveBrowserUrl(appName);
+        }
+        if (!windowUrl && lastBrowserUrlLookupValue) {
+          windowUrl = lastBrowserUrlLookupValue;
+        }
+      }
+    }
 
     // Classify and accumulate time
     const rules = getCategoryRules();
