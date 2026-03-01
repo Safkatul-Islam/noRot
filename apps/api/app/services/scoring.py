@@ -55,6 +55,12 @@ def compute_score(snapshot: UsageSnapshot, snooze_pressure: float = 0.0) -> floa
     """
     signals = snapshot.signals
 
+    # Prefer client-computed focus score when available.
+    # `focusScore` is 0-100 where higher = more focused; invert to procrastination score.
+    if signals.focus_score is not None:
+        score = (100.0 - signals.focus_score) + snooze_pressure
+        return max(0.0, min(score, 100.0))
+
     # --- distract ratio ---
     if signals.session_minutes <= 0:
         distract_ratio = 0.0

@@ -23,6 +23,7 @@ class UsageSignals(BaseModel):
     time_of_day_local: str = Field(alias="timeOfDayLocal", max_length=10)  # "HH:MM"
     snoozes_last_60_min: int = Field(alias="snoozesLast60Min")
     recent_distract_ratio: Optional[float] = Field(default=None, alias="recentDistractRatio")
+    focus_score: Optional[float] = Field(default=None, alias="focusScore", ge=0.0, le=100.0)
 
 
 class UsageCategories(BaseModel):

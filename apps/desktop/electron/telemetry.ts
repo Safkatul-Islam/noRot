@@ -43,6 +43,7 @@ export function createTelemetryCollector(
   getGeminiApiKey: () => string,
   getActiveTodos: () => TodoItem[],
   onTick?: (tick: TelemetryTick) => void,
+  getExplicitCategoryOverride?: (appName: string, activeDomain?: string) => UsageSnapshot['categories']['activeCategory'] | null,
 ): TelemetryCollector {
   let running = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -227,13 +228,18 @@ export function createTelemetryCollector(
       }
 
       // Only apply override if the cached result matches the CURRENT activity
-      if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
-        category = 'productive';
-      }
-    } else {
+    if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
+      category = 'productive';
+    }
+  } else {
       // Clear context result when user switches to non-distracting app
       lastContextResult = null;
       lastContextResultKey = '';
+    }
+
+    const explicitOverride = getExplicitCategoryOverride?.(appName, activeDomain);
+    if (explicitOverride) {
+      category = explicitOverride;
     }
 
     switch (category) {

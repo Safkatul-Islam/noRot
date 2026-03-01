@@ -109,3 +109,21 @@ def test_usage_categories_model_defaults_context_fields_to_none():
     cat = UsageCategories(activeApp="Chrome", activeCategory="productive")
     assert cat.context_todo is None
     assert cat.context_override is None
+
+
+def test_score_endpoint_prefers_focus_score_when_present(client):
+    payload = _snapshot_dict(
+        timestamp="2026-02-23T12:00:00.000Z",
+        session_minutes=20,
+        distracting_minutes=10,
+        productive_minutes=10,
+        app_switches_last_5_min=10,
+        active_category="entertainment",
+        focus_intent=False,
+    )
+    payload["signals"]["focusScore"] = 80
+
+    res = client.post("/score?persona=coach&snoozePressure=0", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["procrastinationScore"] == 20.0

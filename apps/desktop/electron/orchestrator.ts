@@ -77,9 +77,11 @@ interface OrchestratorState {
   currentSettings: UserSettings;
   activeInterventionId: string | null;
   activeInterventionCategories: { activeApp: string; activeDomain?: string } | null;
+  interventionCategoriesById: Map<string, { activeApp: string; activeDomain?: string }>;
   complianceSnapshots: number;
   focusEngine: FocusScoreEngine | null;
   latestFocusScore: number;
+  workOverrides: Array<{ app: string; domain?: string; expiresAt: number }>;
 }
 
 const state: OrchestratorState = {
@@ -90,9 +92,11 @@ const state: OrchestratorState = {
   currentSettings: null as unknown as UserSettings, // Lazily loaded after DB init
   activeInterventionId: null,
   activeInterventionCategories: null,
+  interventionCategoriesById: new Map(),
   complianceSnapshots: 0,
   focusEngine: null,
   latestFocusScore: 100,
+  workOverrides: [],
 };
 
 let settingsLoaded = false;
@@ -120,6 +124,56 @@ function clamp(value: number, min: number, max: number): number {
 function scoreToSeverity(score: number): Severity {
   const band = SEVERITY_BANDS.find((b) => score >= b.scoreMin && score <= b.scoreMax);
   return (band ? band.severity : 0) as Severity;
+}
+
+function normalizeKey(value: string | undefined): string | undefined {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return v ? v : undefined;
+}
+
+function pruneWorkOverrides(now: number): void {
+  const before = state.workOverrides.length;
+  state.workOverrides = state.workOverrides.filter((o) => typeof o.expiresAt === 'number' && o.expiresAt > now);
+  if (state.workOverrides.length !== before) {
+    database.setWorkOverrides(state.workOverrides);
+  }
+}
+
+function getExplicitCategoryOverride(appName: string, activeDomain?: string): UsageSnapshot['categories']['activeCategory'] | null {
+  const now = Date.now();
+  pruneWorkOverrides(now);
+
+  const app = normalizeKey(appName);
+  if (!app) return null;
+  const domain = normalizeKey(activeDomain);
+
+  for (const o of state.workOverrides) {
+    if (o.app !== app) continue;
+    if (o.domain && o.domain !== domain) continue;
+    return 'productive';
+  }
+  return null;
+}
+
+function upsertWorkOverride(activeApp: string, activeDomain: string | undefined, durationMs: number): void {
+  const now = Date.now();
+  pruneWorkOverrides(now);
+  const app = normalizeKey(activeApp);
+  if (!app) return;
+  const domain = normalizeKey(activeDomain);
+  const expiresAt = now + durationMs;
+
+  const existing = state.workOverrides.find((o) => o.app === app && (o.domain ?? undefined) === (domain ?? undefined));
+  if (existing) {
+    existing.expiresAt = Math.max(existing.expiresAt, expiresAt);
+  } else {
+    state.workOverrides.push({
+      app,
+      ...(domain ? { domain } : {}),
+      expiresAt,
+    });
+  }
+  database.setWorkOverrides(state.workOverrides);
 }
 
 function decaySnoozePressure(): number {
@@ -373,6 +427,7 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         activeApp: snapshot.categories.activeApp,
         activeDomain: snapshot.categories.activeDomain,
       };
+      state.interventionCategoriesById.set(intervention.id, state.activeInterventionCategories);
       state.complianceSnapshots = 0;
 
       // Ensure the window is visible so the renderer processes IPC immediately
@@ -426,9 +481,12 @@ export function startTelemetry(): void {
   state.lastInterventionTime = 0;
   state.activeInterventionId = null;
   state.activeInterventionCategories = null;
+  state.interventionCategoriesById = new Map();
   state.complianceSnapshots = 0;
   state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
   state.latestFocusScore = 100;
+  state.workOverrides = database.getWorkOverrides();
+  pruneWorkOverrides(Date.now());
 
   state.telemetryCollector = createTelemetryCollector(
     () => ensureSettings().categoryRules,
@@ -437,6 +495,7 @@ export function startTelemetry(): void {
     () => ensureSettings().geminiApiKey,
     () => database.getTodos().filter((t) => !t.done),
     processTick,
+    getExplicitCategoryOverride,
   );
   state.telemetryCollector.start();
 
@@ -455,6 +514,7 @@ export function stopTelemetry(): void {
   }
   state.focusEngine = null;
   state.latestFocusScore = 100;
+  state.interventionCategoriesById = new Map();
 
   // Set tray to inactive/gray
   updateTrayState({
@@ -481,6 +541,12 @@ export function handleInterventionResponse(
 ): void {
   database.updateInterventionResponse(eventId, response);
 
+  const categoriesForThisIntervention =
+    state.interventionCategoriesById.get(eventId) ??
+    (state.activeInterventionId === eventId ? state.activeInterventionCategories : null);
+
+  state.interventionCategoriesById.delete(eventId);
+
   // Clear compliance tracking so auto-dismiss won't fire after user responds
   if (state.activeInterventionId === eventId) {
     state.activeInterventionId = null;
@@ -495,6 +561,10 @@ export function handleInterventionResponse(
       state.telemetryCollector.addSnooze();
     }
   } else if (response === 'working') {
+    if (categoriesForThisIntervention?.activeApp) {
+      // Treat the intervention-triggering app/domain as productive for 2 hours.
+      upsertWorkOverride(categoriesForThisIntervention.activeApp, categoriesForThisIntervention.activeDomain, 2 * 60 * 60 * 1000);
+    }
     // Reward/acknowledge: extend cooldown and drop any accumulated snooze pressure.
     const settings = ensureSettings();
     state.snoozeTimestamps = [];

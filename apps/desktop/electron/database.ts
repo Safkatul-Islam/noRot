@@ -7,6 +7,12 @@ import { buildUpdateTodoSql, type TodoUpdateFields } from './todo-update';
 
 let db: Database.Database;
 
+export interface WorkOverride {
+  app: string; // normalized lowercase
+  domain?: string; // normalized lowercase
+  expiresAt: number; // epoch ms
+}
+
 export function initDatabase(): void {
   const dbPath = path.join(app.getPath('userData'), 'norot.db');
   db = new Database(dbPath);
@@ -367,6 +373,34 @@ export function updateSetting(key: string, value: unknown): void {
     key,
     JSON.stringify(value)
   );
+}
+
+function getSettingRaw(key: string): string | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function getWorkOverrides(): WorkOverride[] {
+  const raw = getSettingRaw('workOverrides');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((x) => x as Partial<WorkOverride>)
+      .filter((x) => typeof x.app === 'string' && typeof x.expiresAt === 'number')
+      .map((x) => ({
+        app: x.app!,
+        ...(typeof x.domain === 'string' ? { domain: x.domain } : {}),
+        expiresAt: x.expiresAt!,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export function setWorkOverrides(overrides: WorkOverride[]): void {
+  updateSetting('workOverrides', overrides);
 }
 
 // --- Todos ---
