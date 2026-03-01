@@ -356,6 +356,7 @@ export function createTelemetryCollector(
             ? 'classifying'
             : 'idle';
 
+    const subject = activeDomain ? `${appName} (${activeDomain})` : appName;
     const nextScanInMs = visionEligible && !visionInFlight
       ? Math.max(0, VISION_REFRESH_MS - (now - lastVisionFinishedAt))
       : null;
@@ -365,13 +366,15 @@ export function createTelemetryCollector(
       visionStatus === 'disabled'
         ? 'AI vision is off.'
         : !visionEligible
-          ? `Already classified as ${toUiCategory(baseCategory)}.`
+          ? `Already classified: ${subject} → ${toUiCategory(baseCategory)}.`
           : visionStatus === 'classifying'
             ? visionProgressKey === activityKey && visionProgress
-              ? `Scanning (${visionProgress.attempt}/${visionProgress.total}) — checking documents vs entertainment…`
-              : 'Scanning — checking documents vs entertainment…'
+              ? `Scanning ${subject} (${visionProgress.attempt}/${visionProgress.total}) — checking documents vs entertainment…`
+              : `Scanning ${subject} — checking documents vs entertainment…`
             : cachedActivity?.activitySource === 'vision'
-              ? (nextScanInSec != null ? `Scan complete. Next scan in ${nextScanInSec}s.` : 'Scan complete.')
+              ? (nextScanInSec != null
+                ? `Scan: ${subject} → ${toUiCategory(cachedActivity.category)}${cachedActivity.activityLabel ? ` (${cachedActivity.activityLabel})` : ''}. Next scan in ${nextScanInSec}s.`
+                : `Scan: ${subject} → ${toUiCategory(cachedActivity.category)}${cachedActivity.activityLabel ? ` (${cachedActivity.activityLabel})` : ''}.`)
               : lastVisionOutcome === 'uncertain'
                 ? (nextScanInSec != null
                   ? `Could not classify confidently — keeping ${toUiCategory(baseCategory)}. Next scan in ${nextScanInSec}s.`
