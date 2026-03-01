@@ -5,6 +5,7 @@ interface VoiceChatState {
   isOpen: boolean;
   mode: 'coach' | 'checkin';
   proposedTodos: TodoItem[];
+  dbTodos: TodoItem[];
   isExtracting: boolean;
   missingGeminiKey: boolean;
   open: (mode?: 'coach' | 'checkin') => void;
@@ -13,6 +14,7 @@ interface VoiceChatState {
   close: () => void;
   setProposedTodos: (todos: TodoItem[]) => void;
   clearProposedTodos: () => void;
+  setDbTodos: (todos: TodoItem[]) => void;
   setIsExtracting: (v: boolean) => void;
   setMissingGeminiKey: (v: boolean) => void;
 }
@@ -21,6 +23,7 @@ export const useVoiceChatStore = create<VoiceChatState>((set) => ({
   isOpen: false,
   mode: 'coach',
   proposedTodos: [],
+  dbTodos: [],
   isExtracting: false,
   missingGeminiKey: false,
   open: (mode = 'coach') => set((state) => ({
@@ -37,10 +40,11 @@ export const useVoiceChatStore = create<VoiceChatState>((set) => ({
     isExtracting: false,
     missingGeminiKey: false,
   })),
-  openCheckin: () => set({ isOpen: true, mode: 'checkin', proposedTodos: [], isExtracting: false, missingGeminiKey: false }),
+  openCheckin: () => set({ isOpen: true, mode: 'checkin', proposedTodos: [], dbTodos: [], isExtracting: false, missingGeminiKey: false }),
   close: () => set({ isOpen: false }),
   setProposedTodos: (todos) => set({ proposedTodos: todos }),
   clearProposedTodos: () => set({ proposedTodos: [], isExtracting: false, missingGeminiKey: false }),
+  setDbTodos: (todos) => set({ dbTodos: todos }),
   setIsExtracting: (v) => set({ isExtracting: v }),
   setMissingGeminiKey: (v) => set({ missingGeminiKey: v }),
 }));

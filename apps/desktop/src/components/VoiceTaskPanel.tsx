@@ -1,9 +1,13 @@
+import { useState, useEffect } from 'react';
 import { Loader2, ListTodo } from 'lucide-react';
 import type { TodoItem } from '@norot/shared';
 import { GlassCard } from '@/components/GlassCard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { TodoPreviewList } from '@/components/TodoPreviewList';
 import { cn } from '@/lib/utils';
+import { formatDurationMinutes, formatTimeOfDay, hhmmToMinutes } from '@/lib/time-utils';
+import type { TimeFormat } from '@/lib/time-utils';
+import { getNorotAPI } from '@/lib/norot-api';
 
 interface TodoItemWithEdited extends TodoItem {
   _userEdited?: boolean;
@@ -11,6 +15,7 @@ interface TodoItemWithEdited extends TodoItem {
 
 interface VoiceTaskPanelProps {
   title: string;
+  existingTodos?: TodoItem[];
   isExtracting: boolean;
   missingGeminiKey: boolean;
   todos: TodoItem[];
@@ -26,6 +31,7 @@ interface VoiceTaskPanelProps {
 
 export function VoiceTaskPanel({
   title,
+  existingTodos,
   isExtracting,
   missingGeminiKey,
   todos,
@@ -38,6 +44,13 @@ export function VoiceTaskPanel({
   footer,
   className,
 }: VoiceTaskPanelProps) {
+  const [timeFormat, setTimeFormat] = useState<TimeFormat>('12h');
+  useEffect(() => {
+    getNorotAPI().getSettings()
+      .then((s) => setTimeFormat(s?.timeFormat === '24h' ? '24h' : '12h'))
+      .catch(() => {});
+  }, []);
+
   const allCount = todos.length;
   const withTiming = todos.filter((t) =>
     (typeof t.deadline === 'string' && t.deadline)
@@ -50,7 +63,18 @@ export function VoiceTaskPanel({
   const hidden = floatingIds ?? new Set<string>();
   const visibleTodos = todos.filter((t) => !hidden.has(t.id));
 
-  const shouldShowEmptyText = Boolean(emptyText) && visibleTodos.length === 0 && !missingGeminiKey;
+  const sortedExistingTodos = existingTodos
+    ? [...existingTodos].sort((a, b) => {
+      const aMins = a.deadline ? hhmmToMinutes(a.deadline) ?? Infinity : Infinity;
+      const bMins = b.deadline ? hhmmToMinutes(b.deadline) ?? Infinity : Infinity;
+      return aMins - bMins;
+    })
+    : undefined;
+
+  const shouldShowEmptyText = Boolean(emptyText)
+    && visibleTodos.length === 0
+    && (!existingTodos || existingTodos.length === 0)
+    && !missingGeminiKey;
 
   return (
     <GlassCard
@@ -103,6 +127,63 @@ export function VoiceTaskPanel({
           {missingGeminiKey && (
             <p className="text-xs text-text-secondary/70 italic px-1 pb-3 text-center">
               Add a Gemini API key in Settings to auto-extract tasks from your conversation.
+            </p>
+          )}
+
+          {/* Existing DB todos (read-only) */}
+          {sortedExistingTodos && sortedExistingTodos.length > 0 && (
+            <div className="mb-3">
+              {visibleTodos.length > 0 && (
+                <p className="text-[11px] font-medium text-text-secondary/50 uppercase tracking-wider mb-2">
+                  Existing
+                </p>
+              )}
+              <ul className="space-y-1.5">
+                {sortedExistingTodos.map((t) => {
+                  const start = typeof t.startTime === 'string' && t.startTime ? t.startTime : undefined;
+                  const end = typeof t.deadline === 'string' && t.deadline ? t.deadline : undefined;
+
+                  let timeLabel = '';
+                  if (start && end) {
+                    let duration = typeof t.durationMinutes === 'number' && Number.isFinite(t.durationMinutes) && t.durationMinutes > 0
+                      ? Math.trunc(t.durationMinutes)
+                      : undefined;
+                    if (!duration) {
+                      const startMins = hhmmToMinutes(start);
+                      const endMins = hhmmToMinutes(end);
+                      if (startMins != null && endMins != null) {
+                        const rawDiff = endMins - startMins;
+                        const diff = rawDiff >= 0 ? rawDiff : rawDiff + 24 * 60;
+                        if (diff > 0 && diff <= 24 * 60) duration = diff;
+                      }
+                    }
+                    timeLabel = `${formatTimeOfDay(start, timeFormat)} - ${formatTimeOfDay(end, timeFormat)}`;
+                    if (duration) timeLabel += ` (${formatDurationMinutes(duration)})`;
+                  } else if (end) {
+                    timeLabel = formatTimeOfDay(end, timeFormat);
+                  } else if (start) {
+                    timeLabel = `from ${formatTimeOfDay(start, timeFormat)}`;
+                  }
+
+                  return (
+                    <li key={t.id} className="flex items-center gap-2 text-sm text-text-secondary/80 px-1">
+                      <span className={cn('min-w-0 truncate', t.done && 'line-through opacity-50')}>{t.text}</span>
+                      {timeLabel && (
+                        <span className="shrink-0 whitespace-nowrap text-[10px] text-primary/70">
+                          {timeLabel}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {/* "New" sub-header when both existing and draft todos are present */}
+          {existingTodos && existingTodos.length > 0 && visibleTodos.length > 0 && (
+            <p className="text-[11px] font-medium text-text-secondary/50 uppercase tracking-wider mb-2 mt-1">
+              New
             </p>
           )}
 

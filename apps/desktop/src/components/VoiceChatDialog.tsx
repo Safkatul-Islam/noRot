@@ -24,12 +24,45 @@ export function VoiceChatDialog() {
   const { isOpen, mode, close, clearProposedTodos } = useVoiceChatStore();
   const storeHasProposed = useVoiceChatStore(selectHasProposedTodos);
   const proposedTodos = useVoiceChatStore((s) => s.proposedTodos) as TodoItemWithEdited[];
+  const dbTodos = useVoiceChatStore((s) => s.dbTodos);
   const isExtracting = useVoiceChatStore((s) => s.isExtracting);
   const missingGeminiKey = useVoiceChatStore((s) => s.missingGeminiKey);
 
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const isReviewingRef = useRef(false);
+  isReviewingRef.current = isReviewing;
+  const [floatingBubbles, setFloatingBubbles] = useState<FloatingBubble[]>([]);
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const draftTodos = useMemo(() => ({
     getDrafts: () => useVoiceChatStore.getState().proposedTodos,
-    setDrafts: (todos: TodoItem[]) => useVoiceChatStore.getState().setProposedTodos(todos),
+    setDrafts: (todos: TodoItem[]) => {
+      const prevTodos = useVoiceChatStore.getState().proposedTodos as TodoItemWithEdited[];
+      const prevIds = new Set(prevTodos.map((t) => t.id));
+
+      useVoiceChatStore.getState().setProposedTodos(todos);
+
+      const nowState = useVoiceChatStore.getState();
+      if (!nowState.isOpen) return;
+      if (nowState.mode !== 'coach') return;
+      if (isReviewingRef.current) return;
+
+      const newExtracted = (todos as TodoItemWithEdited[])
+        .filter((t) => !prevIds.has(t.id) && !t._userEdited);
+      if (newExtracted.length === 0) return;
+
+      const now = Date.now();
+      const bubbles: FloatingBubble[] = newExtracted.map((t, i) => ({
+        id: t.id,
+        text: t.text,
+        spawnedAt: now,
+        delayMs: i * 200,
+      }));
+      setFloatingBubbles((prevB) => [...prevB, ...bubbles]);
+    },
   }), []);
 
   const {
@@ -52,13 +85,6 @@ export function VoiceChatDialog() {
   const sendUserActivityRef = useRef(sendUserActivity);
   sendUserActivityRef.current = sendUserActivity;
   const lastTranscriptAtRef = useRef<number>(Date.now());
-
-  const [confirmingClose, setConfirmingClose] = useState(false);
-  const [isReviewing, setIsReviewing] = useState(false);
-  const [floatingBubbles, setFloatingBubbles] = useState<FloatingBubble[]>([]);
-
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
@@ -110,20 +136,38 @@ export function VoiceChatDialog() {
   useEffect(() => {
     if (isOpen && !hasStartedRef.current) {
       hasStartedRef.current = true;
+      isReviewingRef.current = false;
       setIsReviewing(false);
       setFloatingBubbles([]);
       setSaveError(null);
       startConversationRef.current();
+
+      // Load existing DB todos for coach mode panel
+      if (mode === 'coach') {
+        getNorotAPI().getTodos()
+          .then((todos) => useVoiceChatStore.getState().setDbTodos(todos.filter((t) => !t.done)))
+          .catch(() => { /* ignore */ });
+      }
     }
     if (!isOpen) {
       hasStartedRef.current = false;
       setConfirmingClose(false);
+      isReviewingRef.current = false;
       setIsReviewing(false);
       setFloatingBubbles([]);
       setIsSaving(false);
       setSaveError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, mode]);
+
+  // Subscribe to DB todo changes while dialog is open (coach mode)
+  useEffect(() => {
+    if (!isOpen || mode !== 'coach') return;
+    const unsub = getNorotAPI().onTodosUpdated((updated: TodoItem[]) => {
+      useVoiceChatStore.getState().setDbTodos(updated.filter((t) => !t.done));
+    });
+    return unsub;
+  }, [isOpen, mode]);
 
   // Auto-scroll transcript
   useEffect(() => {
@@ -193,12 +237,14 @@ export function VoiceChatDialog() {
     }
 
     setFloatingBubbles([]);
+    isReviewingRef.current = true;
     setIsReviewing(true);
     await stopConversation();
   };
 
   const handleKeepTalking = () => {
     setSaveError(null);
+    isReviewingRef.current = false;
     setIsReviewing(false);
     startConversationRef.current();
   };
@@ -224,7 +270,10 @@ export function VoiceChatDialog() {
     close();
   };
 
-  const taskTitle = isReviewing ? 'Your Tasks' : 'Draft Tasks';
+  const hasExisting = dbTodos.length > 0;
+  const taskTitle = isReviewing
+    ? (proposedTodos.length > 0 ? 'Review & Save' : 'Your Tasks')
+    : (hasExisting ? 'Your Tasks' : 'Draft Tasks');
   const showEmptyTalking = !isReviewing;
 
   const statusText = isReviewing
@@ -428,7 +477,7 @@ export function VoiceChatDialog() {
                             <Save className="size-4 mr-2" />
                             {isSaving
                               ? 'Saving...'
-                              : `Save ${proposedTodos.length} task${proposedTodos.length !== 1 ? 's' : ''}`}
+                              : `Save ${proposedTodos.length} new task${proposedTodos.length !== 1 ? 's' : ''}`}
                           </Button>
                           <Button
                             size="lg"
@@ -455,6 +504,7 @@ export function VoiceChatDialog() {
                   {mode === 'coach' && (
                     <VoiceTaskPanel
                       title={taskTitle}
+                      existingTodos={dbTodos}
                       isExtracting={isExtracting}
                       missingGeminiKey={missingGeminiKey}
                       todos={proposedTodos}

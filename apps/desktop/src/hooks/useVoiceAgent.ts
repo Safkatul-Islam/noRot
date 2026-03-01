@@ -7,7 +7,7 @@ import type { DraftAwareOptions, TodoToolBackend } from '@/lib/todo-tool-backend
 import { DraftAwareTodoBackend, DbTodoBackend } from '@/lib/todo-tool-backend';
 import type { VoiceAgentError } from '@/lib/voice-errors';
 import { parseVoiceError } from '@/lib/voice-errors';
-import type { ChatMessage } from '@norot/shared';
+import type { ChatMessage, TodoItem } from '@norot/shared';
 
 export function useVoiceAgent(opts?: {
   mode?: 'coach' | 'checkin';
@@ -18,8 +18,16 @@ export function useVoiceAgent(opts?: {
   draftTodos?: DraftAwareOptions;
   /** Override the tool backend entirely (advanced). */
   backend?: TodoToolBackend;
+
+  /**
+   * Controls what we inject into the agent as {{existing_todos}}.
+   * - 'db' (default): active DB todos
+   * - 'none': always inject "none yet" (useful for onboarding/daily setup)
+   */
+  existingTodosContext?: 'db' | 'none';
 }) {
   const mode = opts?.mode ?? 'coach';
+  const existingTodosContext = opts?.existingTodosContext ?? 'db';
   const [transcript, setTranscript] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<VoiceAgentError | null>(null);
   const [micMuted, setMicMuted] = useState(false);
@@ -101,7 +109,36 @@ export function useVoiceAgent(opts?: {
         const { signedUrl } = mode === 'checkin'
           ? await api.ensureCheckinAgent()
           : await api.ensureVoiceAgent();
-        await conversation.startSession({ signedUrl });
+
+        // Inject existing todo context for coach mode via ElevenLabs dynamicVariables
+        let dynamicVariables: Record<string, string | number | boolean> | undefined;
+        if (mode === 'coach') {
+          if (existingTodosContext === 'none') {
+            dynamicVariables = { existing_todos: 'none yet' };
+          } else {
+            try {
+              const dbTodos = await api.getTodos();
+              const active = dbTodos.filter((t: TodoItem) => !t.done);
+              dynamicVariables = {
+                existing_todos: active.length > 0
+                  ? active.map((t: TodoItem) => {
+                    let s = t.text;
+                    if (typeof t.startTime === 'string' && t.startTime) s += ` (start ${t.startTime})`;
+                    if (typeof t.deadline === 'string' && t.deadline) s += ` (due ${t.deadline})`;
+                    return s;
+                  }).join(', ')
+                  : 'none yet',
+              };
+            } catch {
+              dynamicVariables = { existing_todos: 'none yet' };
+            }
+          }
+        }
+
+        await conversation.startSession({
+          signedUrl,
+          ...(dynamicVariables ? { dynamicVariables } : {}),
+        });
       };
 
       try {

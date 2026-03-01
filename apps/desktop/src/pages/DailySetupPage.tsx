@@ -65,10 +65,34 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
   // Voice agent hook
   const draftTodos = useMemo(() => ({
     getDrafts: () => useDailySetupStore.getState().previewTodos,
-    setDrafts: (todos: TodoItem[]) => useDailySetupStore.getState().setPreviewTodos(todos),
+    setDrafts: (todos: TodoItem[]) => {
+      // Tool-driven draft updates (add_todo, update_todo, etc.) bypass transcript extraction,
+      // so we spawn the same "task bubbles" here for the shared-layout fly-into-list animation.
+      useDailySetupStore.setState((prev) => {
+        const prevIds = new Set((prev.previewTodos as TodoItemWithEdited[]).map((t) => t.id));
+        const newExtracted = (todos as TodoItemWithEdited[])
+          .filter((t) => !prevIds.has(t.id) && !t._userEdited);
+        if (prev.isReviewing || newExtracted.length === 0) {
+          return { previewTodos: todos };
+        }
+
+        const now = Date.now();
+        const bubbles = newExtracted.map((t, i) => ({
+          id: t.id,
+          text: t.text,
+          spawnedAt: now,
+          delayMs: i * 200,
+        }));
+
+        return {
+          previewTodos: todos,
+          floatingBubbles: [...prev.floatingBubbles, ...bubbles],
+        };
+      });
+    },
   }), []);
 
-  const voiceAgent = useVoiceAgent({ mode: 'coach', draftTodos });
+  const voiceAgent = useVoiceAgent({ mode: 'coach', draftTodos, existingTodosContext: 'none' });
 
   // Check if API keys are configured & load persona
   useEffect(() => {
