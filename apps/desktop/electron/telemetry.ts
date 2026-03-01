@@ -84,7 +84,7 @@ export function createTelemetryCollector(
   // Browser domain can be temporarily missing (library gaps, rapid title changes).
   // Keep the last known domain for a short grace window to avoid category flapping.
   const lastBrowserDomainByApp = new Map<string, { domain: string; at: number }>();
-  const BROWSER_DOMAIN_GRACE_MS = 3_000;
+  const BROWSER_DOMAIN_GRACE_MS = 60_000;
 
   // Context-aware override (non-blocking Gemini check)
   let lastContextResult: ContextResult | null = null;

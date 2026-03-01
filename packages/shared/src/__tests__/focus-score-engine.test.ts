@@ -141,19 +141,20 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     expect(score).toBe(100) // now 10s total → full recovery
   })
 
-  test('switching from distracted to neutral to distracted resets timer', () => {
+  test('neutral apps pause distraction timer (no reset)', () => {
     const engine = new FocusScoreEngine()
 
     // 9 seconds of distraction (not yet at level 1)
     simulate(engine, 'social', 9)
     expect(engine.getFocusScore()).toBe(100)
 
-    // Switch to neutral briefly (resets distraction timer)
-    simulate(engine, 'neutral', 1)
+    // Switch to neutral briefly (pauses)
+    simulate(engine, 'neutral', 2)
+    expect(engine.getFocusScore()).toBe(100)
 
-    // 9 more seconds of distraction — timer restarted so still level 0
-    const score = simulate(engine, 'social', 9)
-    expect(score).toBe(100)
+    // 1 more second of distraction — total distracted time now 10s → level 1
+    const score = simulate(engine, 'social', 1)
+    expect(score).toBe(75)
   })
 
   test('entertainment category counts as distraction', () => {

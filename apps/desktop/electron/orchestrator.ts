@@ -281,7 +281,9 @@ function processTick(tick: TelemetryTick): void {
         // Arm praise as soon as we dip below Locked In.
         if (cur < 100) state.praiseArmed = true;
 
-        if (cur < prev) {
+        if (cur <= 0 && prev > 0) {
+          // Let the dedicated "focus hit 0" intervention handle audio.
+        } else if (cur < prev) {
           state.lastFocusAudioAt = now;
           const sev = focusScoreToSeverity(cur);
           const categories = {

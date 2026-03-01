@@ -27,28 +27,31 @@ export interface FocusScoreTickResult {
 
 export class FocusScoreEngine {
   private currentLevel: number; // 0-4
-  private timeInCurrentStateMs: number; // ms in current activity type
   private currentStateType: 'focused' | 'distracted' | 'neutral';
   private focusedTimeMs: number; // accumulated productive time for gradual recovery
   private levelAtFocusStart: number; // snapshot of level when recovery started
+  private distractedTimeMs: number; // accumulated distracted time for gradual decay
   private levelAtDistractionStart: number; // snapshot of level when distraction started
+  private lastNonNeutralStateType: 'focused' | 'distracted';
 
   constructor(_opts?: { initialFocusScore?: number }) {
     this.currentLevel = 0;
-    this.timeInCurrentStateMs = 0;
     this.currentStateType = 'focused';
     this.focusedTimeMs = 0;
     this.levelAtFocusStart = 0;
+    this.distractedTimeMs = 0;
     this.levelAtDistractionStart = 0;
+    this.lastNonNeutralStateType = 'focused';
   }
 
   reset(_nextFocusScore: number = 100): void {
     this.currentLevel = 0;
-    this.timeInCurrentStateMs = 0;
     this.currentStateType = 'focused';
     this.focusedTimeMs = 0;
     this.levelAtFocusStart = 0;
+    this.distractedTimeMs = 0;
     this.levelAtDistractionStart = 0;
+    this.lastNonNeutralStateType = 'focused';
   }
 
   getFocusScore(): number {
@@ -70,10 +73,15 @@ export class FocusScoreEngine {
     // Handle state transitions
     if (tickType !== this.currentStateType) {
       if (tickType === 'distracted') {
-        // Switching to distracted: wipe all recovery progress, snapshot current level
+        // Switching to distracted: wipe all recovery progress.
+        // IMPORTANT: if we were previously distracted and briefly went neutral,
+        // treat neutral as a pause (do not reset the distraction timer).
         this.focusedTimeMs = 0;
-        this.levelAtDistractionStart = this.currentLevel;
-        this.timeInCurrentStateMs = 0;
+        const resume = this.currentStateType === 'neutral' && this.lastNonNeutralStateType === 'distracted';
+        if (!resume) {
+          this.distractedTimeMs = 0;
+          this.levelAtDistractionStart = this.currentLevel;
+        }
       } else if (tickType === 'focused') {
         // Switching to focused: snapshot current level, keep any banked focusedTimeMs
         // (preserves remainder if we came back from neutral)
@@ -82,21 +90,24 @@ export class FocusScoreEngine {
           this.focusedTimeMs = 0;
         }
         this.levelAtFocusStart = this.currentLevel;
-        this.timeInCurrentStateMs = 0;
+        // Starting/returning to focus resets the distraction timer.
+        this.distractedTimeMs = 0;
       } else {
-        // Switching to neutral: pause recovery — don't reset focusedTimeMs
-        this.timeInCurrentStateMs = 0;
+        // Switching to neutral: pause timers — do not reset focusedTimeMs or distractedTimeMs.
       }
       this.currentStateType = tickType;
     }
 
-    this.timeInCurrentStateMs += elapsedMs;
+    if (tickType !== 'neutral') {
+      this.lastNonNeutralStateType = tickType;
+    }
 
     const prevLevel = this.currentLevel;
 
     if (tickType === 'distracted') {
       // Drop one level for every 10 seconds of distraction, starting from where we were
-      const steps = Math.floor(this.timeInCurrentStateMs / STEP_INTERVAL_MS);
+      this.distractedTimeMs += elapsedMs;
+      const steps = Math.floor(this.distractedTimeMs / STEP_INTERVAL_MS);
       this.currentLevel = Math.min(this.levelAtDistractionStart + steps, MAX_LEVEL);
     } else if (tickType === 'focused') {
       // Accumulate productive time; after 10 seconds, snap back to Locked In.
