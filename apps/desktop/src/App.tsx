@@ -13,12 +13,14 @@ import { WelcomePage } from '@/pages/WelcomePage';
 import { DailySetupPage } from '@/pages/DailySetupPage';
 import { ContinuePromptPage } from '@/pages/ContinuePromptPage';
 import { TodoOverlayPage } from '@/pages/TodoOverlayPage';
+import { InterventionOverlayPage } from '@/pages/InterventionOverlayPage';
 import { CommandPalette } from '@/components/CommandPalette';
 import { InterventionDialog } from '@/components/InterventionDialog';
 import { VoiceChatDialog } from '@/components/VoiceChatDialog';
 import { useScore } from '@/hooks/useScore';
 import { useInterventions } from '@/hooks/useInterventions';
 import { useVoice } from '@/hooks/useVoice';
+import { useSnoozeSync } from '@/hooks/useSnoozeSync';
 import { useSettings } from '@/hooks/useSettings';
 import { useStartupFlow } from '@/hooks/useStartupFlow';
 import { useAppStore } from '@/stores/app-store';
@@ -39,6 +41,7 @@ function AppContent() {
   // Mount hooks to start subscriptions
   useScore();
   useVoice();
+  useSnoozeSync();
   const { interventions, activeIntervention, respondToIntervention } = useInterventions();
   const activePage = useAppStore((s) => s.activePage);
   const setTelemetryActive = useAppStore((s) => s.setTelemetryActive);
@@ -128,6 +131,11 @@ const isTodoOverlay =
   typeof window !== 'undefined' &&
   (window.location.hash === '#todo-overlay' || window.location.hash === '#/todo-overlay');
 
+// Check if this window is the intervention overlay pop-out
+const isInterventionOverlay =
+  typeof window !== 'undefined' &&
+  (window.location.hash === '#intervention-overlay' || window.location.hash === '#/intervention-overlay');
+
 function App() {
   const { completeOnboarding, completeDailySetup, continueSession } = useSettings();
   const { screen, goToDailySetup, goToDashboard } = useStartupFlow();
@@ -145,6 +153,17 @@ function App() {
       <ThemeProvider>
         <TooltipProvider>
           <TodoOverlayPage />
+        </TooltipProvider>
+      </ThemeProvider>
+    );
+  }
+
+  // Intervention overlay pop-out: always-on-top, full-screen window (no DashboardLayout).
+  if (isInterventionOverlay) {
+    return (
+      <ThemeProvider>
+        <TooltipProvider>
+          <InterventionOverlayPage />
         </TooltipProvider>
       </ThemeProvider>
     );
