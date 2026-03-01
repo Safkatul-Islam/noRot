@@ -76,7 +76,6 @@ function getNowMinutesInTimeZone(timeZoneSetting: string | undefined): number {
 
 interface OrchestratorState {
   telemetryCollector: TelemetryCollector | null;
-  lastInterventionTime: number;
   lastStageInterventionAt: number;
   lastStageInterventionSeverity: Severity;
   lastAnyInterventionShownAt: number;
@@ -100,7 +99,6 @@ interface OrchestratorState {
 
 const state: OrchestratorState = {
   telemetryCollector: null,
-  lastInterventionTime: 0,
   lastStageInterventionAt: 0,
   lastStageInterventionSeverity: 0 as Severity,
   lastAnyInterventionShownAt: 0,
@@ -272,7 +270,7 @@ function processTick(tick: TelemetryTick): void {
           persona: settings.persona,
           text,
           tts: { model: 'eleven_v3', stability: 45, speed: 1.02 },
-          cooldownSeconds: settings.cooldownSeconds,
+          cooldownSeconds: 180,
         },
       });
     }
@@ -341,7 +339,7 @@ function processTick(tick: TelemetryTick): void {
           persona: settings.persona,
           text,
           tts: { model: 'eleven_v3', stability: 20, speed: 1.12 },
-          cooldownSeconds: settings.cooldownSeconds,
+          cooldownSeconds: 180,
         },
         interventionId: intervention.id,
       });
@@ -410,7 +408,7 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
           persona,
           text: '',
           tts: { model: 'eleven_v3', stability: 35, speed: 1.08 },
-          cooldownSeconds: settings.cooldownSeconds,
+          cooldownSeconds: 180,
         },
       };
     }
@@ -479,10 +477,6 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
       console.log('[orchestrator] Snooze active — skipping intervention check');
       return;
     }
-    const cooldownMs = settings.cooldownSeconds * 1000;
-    const cooldownExpired = now - state.lastInterventionTime > cooldownMs;
-    const meetsThreshold =
-      scoreResult.procrastinationScore >= settings.scoreThreshold;
     const hasRecommendation = scoreResult.recommendation.mode !== 'none';
 
     const stageEscalated =
@@ -491,14 +485,14 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
       now - state.lastStageInterventionAt > 20_000;
 
     console.log(
-      `[orchestrator] Decision: source=${scoreSource} score=${scoreResult.procrastinationScore} meetsThreshold=${meetsThreshold} cooldownExpired=${cooldownExpired} hasRecommendation=${hasRecommendation} | app="${snapshot.categories.activeApp}" category="${snapshot.categories.activeCategory}" domain="${snapshot.categories.activeDomain ?? 'none'}" recentRatio=${(snapshot.signals.recentDistractRatio ?? 0).toFixed(2)} distracting=${snapshot.signals.distractingMinutes}min session=${snapshot.signals.sessionMinutes}min`
+      `[orchestrator] Decision: source=${scoreSource} score=${scoreResult.procrastinationScore} stageEscalated=${stageEscalated} hasRecommendation=${hasRecommendation} | app="${snapshot.categories.activeApp}" category="${snapshot.categories.activeCategory}" domain="${snapshot.categories.activeDomain ?? 'none'}" recentRatio=${(snapshot.signals.recentDistractRatio ?? 0).toFixed(2)} distracting=${snapshot.signals.distractingMinutes}min session=${snapshot.signals.sessionMinutes}min`
     );
 
     const shouldIntervene =
       !state.activeInterventionId &&
       hasRecommendation &&
       hasInterventionGapElapsed({ lastShownAt: state.lastAnyInterventionShownAt, now, minGapMs: 5_000 }) &&
-      (stageEscalated || (meetsThreshold && cooldownExpired));
+      stageEscalated;
 
     if (shouldIntervene) {
       let interventionText: string | null = null;
@@ -620,16 +614,8 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         });
       }
 
-      if (stageEscalated) {
-        state.lastStageInterventionSeverity = scoreResult.severity;
-        state.lastStageInterventionAt = now;
-      }
-
-      if (!stageEscalated) {
-        state.lastInterventionTime = now;
-        state.lastStageInterventionSeverity = Math.max(state.lastStageInterventionSeverity, scoreResult.severity) as Severity;
-        state.lastStageInterventionAt = now;
-      }
+      state.lastStageInterventionSeverity = scoreResult.severity;
+      state.lastStageInterventionAt = now;
     }
   } catch (err) {
     console.error('[orchestrator] Error processing snapshot:', err);
@@ -645,11 +631,10 @@ export function startTelemetry(): void {
   state.currentSettings = database.getSettings();
   settingsLoaded = true;
   console.log(
-    `[orchestrator] Settings loaded: threshold=${state.currentSettings.scoreThreshold} cooldown=${state.currentSettings.cooldownSeconds}s persona="${state.currentSettings.persona}" rulesCount=${state.currentSettings.categoryRules.length} geminiKey=${!!state.currentSettings.geminiApiKey}`
+    `[orchestrator] Settings loaded: persona="${state.currentSettings.persona}" rulesCount=${state.currentSettings.categoryRules.length} geminiKey=${!!state.currentSettings.geminiApiKey}`
   );
   state.snoozePressure = 0;
   state.snoozeTimestamps = [];
-  state.lastInterventionTime = 0;
   state.lastStageInterventionAt = 0;
   state.lastStageInterventionSeverity = 0 as Severity;
   state.lastAnyInterventionShownAt = 0;
@@ -751,10 +736,8 @@ export function handleInterventionResponse(
       // Treat the intervention-triggering app/domain as productive for 2 hours.
       upsertWorkOverride(categoriesForThisIntervention.activeApp, categoriesForThisIntervention.activeDomain, 2 * 60 * 60 * 1000);
     }
-    // Reward/acknowledge: extend cooldown and drop any accumulated snooze pressure.
-    const settings = ensureSettings();
+    // Reward/acknowledge: drop any accumulated snooze pressure.
     state.snoozeTimestamps = [];
-    state.lastInterventionTime = Date.now() + settings.cooldownSeconds * 1000;
   }
 }
 
@@ -763,7 +746,7 @@ export function refreshSettings(): void {
   settingsLoaded = true;
   clearContextCache();
   console.log(
-    `[orchestrator] Settings refreshed: threshold=${state.currentSettings.scoreThreshold} cooldown=${state.currentSettings.cooldownSeconds}s`
+    `[orchestrator] Settings refreshed: persona="${state.currentSettings.persona}"`
   );
 }
 

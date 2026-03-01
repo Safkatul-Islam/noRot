@@ -2,8 +2,6 @@ import { useEffect } from 'react';
 import { getNorotAPI } from '@/lib/norot-api';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useAppStore } from '@/stores/app-store';
-import { frequencyFromSettings, FREQUENCY_PRESETS } from '@/lib/frequency-presets';
-import type { FrequencyLevel } from '@/lib/frequency-presets';
 import type { Persona } from '@norot/shared';
 
 function todayDateStr(): string {
@@ -13,9 +11,9 @@ function todayDateStr(): string {
 
 export function useSettings() {
   const {
-    persona, interventionFrequency, muted, ttsEngine, toughLoveExplicitAllowed,
+    persona, muted, ttsEngine, toughLoveExplicitAllowed,
     hasCompletedOnboarding, lastDailySetupDate,
-    setPersona, setThreshold, setCooldown, setInterventionFrequency, toggleMute, setTtsEngine, setToughLoveExplicitAllowed,
+    setPersona, setThreshold, setCooldown, toggleMute, setTtsEngine, setToughLoveExplicitAllowed,
     setHasCompletedOnboarding, setLastDailySetupDate,
   } = useSettingsStore();
 
@@ -31,9 +29,6 @@ export function useSettings() {
         setHasCompletedOnboarding(settings.hasCompletedOnboarding ?? false);
         setLastDailySetupDate(settings.lastDailySetupDate ?? '');
 
-        // Snap existing threshold + cooldown to the closest frequency preset
-        const level = frequencyFromSettings(settings.scoreThreshold, settings.cooldownSeconds);
-        setInterventionFrequency(level);
         if (settings.ttsEngine) setTtsEngine(settings.ttsEngine);
       }
     );
@@ -61,22 +56,6 @@ export function useSettings() {
     } catch (err) {
       console.error('[useSettings] Failed to enable explicit tough love, reverting:', err);
       setToughLoveExplicitAllowed(false);
-    }
-  };
-
-  const updateFrequency = async (level: FrequencyLevel) => {
-    const prev = interventionFrequency;
-    const preset = FREQUENCY_PRESETS[level];
-    setInterventionFrequency(level);
-    const api = getNorotAPI();
-    try {
-      await api.updateSettings({
-        scoreThreshold: preset.scoreThreshold,
-        cooldownSeconds: preset.cooldownSeconds,
-      });
-    } catch (err) {
-      console.error('[useSettings] Failed to update frequency, reverting:', err);
-      setInterventionFrequency(prev);
     }
   };
 
@@ -150,7 +129,6 @@ export function useSettings() {
 
   return {
     persona,
-    interventionFrequency,
     muted,
     ttsEngine,
     toughLoveExplicitAllowed,
@@ -158,7 +136,6 @@ export function useSettings() {
     lastDailySetupDate,
     updatePersona,
     enableExplicitToughLove,
-    updateFrequency,
     updateMuted,
     updateTtsEngine,
     completeOnboarding,

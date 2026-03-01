@@ -282,7 +282,7 @@ export function registerIpcHandlers(): void {
         procrastinationScore: 30,
         severity: 1 as Severity,
         reasons: ['Test intervention'],
-        recommendation: { mode: 'nudge', persona: settings.persona, text: intervention.text, tts, cooldownSeconds: settings.cooldownSeconds },
+        recommendation: { mode: 'nudge', persona: settings.persona, text: intervention.text, tts, cooldownSeconds: 180 },
         interventionId: intervention.id,
       });
     }

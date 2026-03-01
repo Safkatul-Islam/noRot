@@ -9,8 +9,6 @@ import { BlurFade } from '@/components/effects/BlurFade';
 import { AudioPlayer } from '@/services/audio/audio-player';
 import { ElevenLabsClient } from '@/services/voice/elevenlabs-client';
 import { useSettings } from '@/hooks/useSettings';
-import { FREQUENCY_PRESETS } from '@/lib/frequency-presets';
-import type { FrequencyLevel } from '@/lib/frequency-presets';
 import { getNorotAPI } from '@/lib/norot-api';
 import type { UserSettings } from '@/lib/electron-api';
 import { useAppStore } from '@/stores/app-store';
@@ -26,7 +24,6 @@ import {
   VolumeX,
   Wifi,
   WifiOff,
-  Gauge,
   MessageSquare,
   Info,
   Palette,
@@ -54,11 +51,9 @@ function getPreviewMessages(persona: Persona): { severity: Severity; text: strin
 export function SettingsPage() {
   const {
     persona,
-    interventionFrequency,
     muted,
     ttsEngine,
     updatePersona,
-    updateFrequency,
     updateMuted,
     updateTtsEngine,
   } = useSettings();
@@ -480,53 +475,7 @@ export function SettingsPage() {
           </GlassCard>
         </BlurFade>
 
-        <BlurFade delay={0.15} className="col-span-6">
-          <GlassCard>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Gauge className="size-5 text-primary" />
-                Intervention Frequency
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <p className="text-sm text-text-secondary leading-relaxed">
-                How often should noRot check in with you?
-              </p>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex justify-between text-[10px] text-text-muted px-1">
-                  <span>Rarely</span>
-                  <span>Often</span>
-                </div>
-                <Slider
-                  min={0}
-                  max={4}
-                  step={1}
-                  value={[interventionFrequency]}
-                  onValueChange={([v]) => updateFrequency(v as FrequencyLevel)}
-                />
-                {/* Dot indicators for the 5 discrete stops */}
-                <div className="flex justify-between px-[10px]">
-                  {FREQUENCY_PRESETS.map((preset) => (
-                    <div
-                      key={preset.id}
-                      className={cn(
-                        'size-2 rounded-full transition-all',
-                        preset.id === interventionFrequency
-                          ? 'bg-primary scale-125'
-                          : 'bg-text-muted/30',
-                      )}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <p className="text-center text-lg font-semibold text-text-primary">
-                {FREQUENCY_PRESETS[interventionFrequency].label}
-              </p>
-            </CardContent>
-          </GlassCard>
-        </BlurFade>
       </div>
 
       {/* Row 3: Audio + Connection — equal halves */}

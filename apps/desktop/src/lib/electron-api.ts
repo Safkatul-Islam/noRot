@@ -10,7 +10,9 @@ export interface CategoryRule {
 export interface UserSettings {
   persona: 'calm_friend' | 'coach' | 'tough_love';
   toughLoveExplicitAllowed: boolean;
+  /** @deprecated No longer drives intervention logic */
   scoreThreshold: number;
+  /** @deprecated No longer drives intervention logic */
   cooldownSeconds: number;
   apiUrl: string;
   elevenLabsApiKey: string;

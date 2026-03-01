@@ -85,7 +85,9 @@ export interface UserSettings {
   persona: 'calm_friend' | 'coach' | 'tough_love';
   /** If false, `tough_love` persona cannot be selected (explicit language). */
   toughLoveExplicitAllowed: boolean;
+  /** @deprecated No longer drives intervention logic */
   scoreThreshold: number;
+  /** @deprecated No longer drives intervention logic */
   cooldownSeconds: number;
   apiUrl: string;
   elevenLabsApiKey: string;
@@ -166,7 +168,9 @@ export const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
 export const DEFAULT_SETTINGS: UserSettings = {
   persona: 'calm_friend',
   toughLoveExplicitAllowed: false,
+  /** @deprecated No longer drives intervention logic */
   scoreThreshold: 25,
+  /** @deprecated No longer drives intervention logic */
   cooldownSeconds: 180,
   apiUrl: 'http://127.0.0.1:8000',
   elevenLabsApiKey: '',

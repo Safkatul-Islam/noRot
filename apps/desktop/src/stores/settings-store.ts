@@ -1,8 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Persona } from '@norot/shared';
-import { FREQUENCY_PRESETS, DEFAULT_FREQUENCY } from '@/lib/frequency-presets';
-import type { FrequencyLevel } from '@/lib/frequency-presets';
+
 
 export type AccentColorId = 'violet' | 'indigo' | 'blue' | 'cyan' | 'emerald' | 'rose' | 'amber';
 
@@ -81,7 +80,6 @@ interface SettingsState {
   persona: Persona;
   scoreThreshold: number;
   cooldownSeconds: number;
-  interventionFrequency: FrequencyLevel;
   muted: boolean;
   ttsEngine: 'auto' | 'elevenlabs' | 'local';
   toughLoveExplicitAllowed: boolean;
@@ -91,7 +89,6 @@ interface SettingsState {
   setPersona: (persona: Persona) => void;
   setThreshold: (threshold: number) => void;
   setCooldown: (seconds: number) => void;
-  setInterventionFrequency: (level: FrequencyLevel) => void;
   toggleMute: () => void;
   setTtsEngine: (engine: 'auto' | 'elevenlabs' | 'local') => void;
   setToughLoveExplicitAllowed: (allowed: boolean) => void;
@@ -106,7 +103,6 @@ export const useSettingsStore = create<SettingsState>()(
       persona: 'calm_friend',
       scoreThreshold: 35,
       cooldownSeconds: 180,
-      interventionFrequency: DEFAULT_FREQUENCY,
       muted: false,
       ttsEngine: 'auto',
       toughLoveExplicitAllowed: false,
@@ -116,14 +112,6 @@ export const useSettingsStore = create<SettingsState>()(
       setPersona: (persona) => set({ persona }),
       setThreshold: (scoreThreshold) => set({ scoreThreshold }),
       setCooldown: (cooldownSeconds) => set({ cooldownSeconds }),
-      setInterventionFrequency: (level) => {
-        const preset = FREQUENCY_PRESETS[level];
-        set({
-          interventionFrequency: level,
-          scoreThreshold: preset.scoreThreshold,
-          cooldownSeconds: preset.cooldownSeconds,
-        });
-      },
       toggleMute: () => set((state) => ({ muted: !state.muted })),
       setTtsEngine: (ttsEngine) => set({ ttsEngine }),
       setToughLoveExplicitAllowed: (toughLoveExplicitAllowed) => set({ toughLoveExplicitAllowed }),
