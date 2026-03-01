@@ -32,7 +32,7 @@ describe('FocusScoreEngine', () => {
     expect(engine.getFocusScore()).toBe(0);
   });
 
-  it('recovers one level every 5 seconds of productive use', () => {
+  it('recovers one level every 5 seconds of productive use (Locked In requires 10s)', () => {
     const engine = new FocusScoreEngine();
 
     // Tank the score to level 4 (score 0)
@@ -59,7 +59,13 @@ describe('FocusScoreEngine', () => {
     }
     expect(engine.getFocusScore()).toBe(75);
 
-    // 5 more seconds → level 0 (score 100, Locked In)
+    // Next 5 seconds: still level 1 — need a full 10s of productive work to get back to Locked In
+    for (let i = 0; i < 5; i++) {
+      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(75);
+
+    // 5 more seconds (10s total at level 1) → level 0 (score 100, Locked In)
     for (let i = 0; i < 5; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }

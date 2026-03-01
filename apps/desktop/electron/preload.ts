@@ -231,6 +231,10 @@ contextBridge.exposeInMainWorld('norot', {
     return ipcRenderer.invoke(IPC_CHANNELS.EXTRACT_TODOS, transcript);
   },
 
+  titleizeTodos: (texts: string[]): Promise<unknown> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.TITLEIZE_TODO_TEXTS, texts);
+  },
+
   getTodos: (): Promise<unknown[]> => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_TODOS);
   },

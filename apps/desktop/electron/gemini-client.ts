@@ -439,3 +439,68 @@ export async function extractTodosWithApps(
     return [];
   }
 }
+
+/**
+ * Rewrite raw task texts into short todo titles.
+ * Best-effort: returns null on failure.
+ */
+export async function titleizeTodoTexts(apiKey: string, texts: string[]): Promise<string[] | null> {
+  try {
+    const cleaned = Array.isArray(texts)
+      ? texts.map((t) => (typeof t === 'string' ? t.trim() : '')).filter((t) => t.length > 0).slice(0, 30)
+      : [];
+    if (cleaned.length === 0) return [];
+
+    // Avoid spending tokens when everything is already short.
+    const alreadyShort = cleaned.every((t) => t.length <= 50 && t.split(/\s+/g).filter(Boolean).length <= 8);
+    if (alreadyShort) return cleaned;
+
+    const client = getClient(apiKey);
+    const systemInstruction =
+      'You rewrite task descriptions into short TODO titles for a productivity app. ' +
+      'Return a JSON array of strings with the SAME length and SAME order as the input. ' +
+      'Each title must be short (max 8 words, max 50 characters), clear, and specific. ' +
+      'Keep key nouns (subject/app/site). Do not add new information. ' +
+      'No emojis, no quotes, no markdown, no trailing punctuation.';
+
+    const prompt =
+      'Rewrite these tasks into short TODO titles:\n' +
+      cleaned.map((t, i) => `${i + 1}. ${t}`).join('\n');
+
+    const response = await client.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        systemInstruction,
+        temperature: 0.2,
+        maxOutputTokens: 256,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+        },
+      },
+    });
+
+    const raw = JSON.parse(response.text || '[]') as unknown;
+    if (!Array.isArray(raw)) return null;
+    if (raw.length !== cleaned.length) return null;
+
+    const clamp = (val: unknown, fallback: string): string => {
+      const base = typeof val === 'string' ? val : '';
+      let t = base.replace(/\s+/g, ' ').trim();
+      t = t.replace(/^["'`]+|["'`]+$/g, '').trim();
+      t = t.replace(/[\s\-:;,.!?]+$/g, '').trim();
+      if (!t) return fallback;
+      const words = t.split(/\s+/g).filter(Boolean);
+      if (words.length > 8) t = words.slice(0, 8).join(' ');
+      if (t.length > 50) t = t.slice(0, 50).trim();
+      return t || fallback;
+    };
+
+    return raw.map((t, i) => clamp(t, cleaned[i]!));
+  } catch (err) {
+    console.error('[gemini] Error titleizing todos:', err);
+    return null;
+  }
+}

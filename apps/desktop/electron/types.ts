@@ -41,6 +41,7 @@ export const IPC_CHANNELS = {
 
   // Todos
   EXTRACT_TODOS: 'todos:extract',
+  TITLEIZE_TODO_TEXTS: 'todos:titleize',
   GET_TODOS: 'todos:get',
   ADD_TODO: 'todos:add',
   TOGGLE_TODO: 'todos:toggle',

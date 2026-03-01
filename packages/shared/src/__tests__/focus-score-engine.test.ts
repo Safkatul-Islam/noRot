@@ -58,7 +58,7 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     expect(score).toBe(0)
   })
 
-  test('focused use recovers one level every 5 seconds', () => {
+  test('focused use recovers one level every 5 seconds (Locked In requires 10s)', () => {
     const engine = new FocusScoreEngine()
 
     // Get distracted for 15 seconds → level 3 (score 25)
@@ -73,9 +73,13 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     const after10 = simulate(engine, 'productive', 5)
     expect(after10).toBe(75)
 
-    // 5 more seconds → level 0 (score 100, Locked In)
+    // Next 5 seconds: still level 1 — need a full 10s of productive work to get back to Locked In
     const after15 = simulate(engine, 'productive', 5)
-    expect(after15).toBe(100)
+    expect(after15).toBe(75)
+
+    // 5 more seconds (10s total at level 1) → level 0 (score 100, Locked In)
+    const after20 = simulate(engine, 'productive', 5)
+    expect(after20).toBe(100)
   })
 
   test('less than 5 seconds of productive use does not recover a level', () => {

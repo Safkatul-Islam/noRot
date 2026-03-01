@@ -136,8 +136,8 @@ export function initDatabase(): void {
       // - seed rules (id starts with "seed-")
       // - legacy default rules (ids like "prod-*", "ent-*", "soc-*", "title-*") *only if* they still match the old default category,
       // so user-edited rules won't be overridden.
-      const defaultByKey = new Map(
-        DEFAULT_CATEGORY_RULES.map((r) => [`${r.matchType}:${r.pattern.trim().toLowerCase()}`, r.category] as const)
+      const defaultByKey = new Map<string, CategoryRule['category']>(
+        DEFAULT_CATEGORY_RULES.map((r) => [`${r.matchType}:${r.pattern.trim().toLowerCase()}`, r.category])
       );
       for (const r of savedRules) {
         if (!r || typeof r.matchType !== 'string' || typeof r.pattern !== 'string') continue;
@@ -266,6 +266,10 @@ export function getAppStats(minutes: number = 1440): Array<{
   totalSeconds: number;
   lastSeen: string;
 }> {
+  // Snapshots are not guaranteed to be perfectly periodic (app sleep, stalls, version changes).
+  // Derive durations from consecutive snapshot timestamps and clamp to avoid huge gaps.
+  const DEFAULT_SECONDS_PER_SNAPSHOT = 10;
+  const MAX_SECONDS_PER_SNAPSHOT = 30;
   const cutoff = new Date(Date.now() - minutes * 60 * 1000).toISOString();
   const rows = db
     .prepare(
@@ -275,6 +279,15 @@ export function getAppStats(minutes: number = 1440): Array<{
 
   const apps = new Map<string, { appName: string; domain?: string; category: string; totalSeconds: number; lastSeen: string }>();
 
+  let prev: {
+    key: string;
+    appName: string;
+    domain?: string;
+    category: string;
+    ts: string;
+    tsMs: number;
+  } | null = null;
+
   for (const row of rows) {
     try {
       const snapshot = JSON.parse(row.data) as any;
@@ -283,25 +296,69 @@ export function getAppStats(minutes: number = 1440): Array<{
       const activeDomain = snapshot?.categories?.activeDomain;
       if (typeof rawAppName !== 'string' || !rawAppName) continue;
 
+      const ts = typeof snapshot?.timestamp === 'string' ? snapshot.timestamp : row.timestamp;
+      const tsMs = Date.parse(ts);
+      if (!Number.isFinite(tsMs)) continue;
+
       // Key per (app, domain) so "Chrome + YouTube" and "Chrome + GitHub" can be tuned separately.
       const key = `${rawAppName}||${activeDomain ?? ''}`;
-      const ts = typeof snapshot?.timestamp === 'string' ? snapshot.timestamp : row.timestamp;
-      const existing = apps.get(key);
-      if (existing) {
-        existing.totalSeconds += 5;
-        existing.lastSeen = ts;
+      const domain = typeof activeDomain === 'string' && activeDomain ? activeDomain : undefined;
+      const categoryStr = typeof category === 'string' && category ? category : 'neutral';
+
+      // Ensure current key exists and keep lastSeen/category fresh.
+      const curExisting = apps.get(key);
+      if (curExisting) {
+        curExisting.lastSeen = ts;
+        curExisting.category = categoryStr;
       } else {
         apps.set(key, {
           appName: rawAppName,
-          ...(typeof activeDomain === 'string' && activeDomain ? { domain: activeDomain } : {}),
-          category: category ?? 'neutral',
-          totalSeconds: 5,
+          ...(domain ? { domain } : {}),
+          category: categoryStr,
+          totalSeconds: 0,
           lastSeen: ts,
         });
       }
+
+      // Attribute elapsed time since the previous snapshot to the *previous* app.
+      if (prev) {
+        const deltaMs = tsMs - prev.tsMs;
+        const deltaSecRaw = Number.isFinite(deltaMs) && deltaMs > 0 ? deltaMs / 1000 : NaN;
+        const deltaSec = Number.isFinite(deltaSecRaw)
+          ? Math.max(0, Math.min(MAX_SECONDS_PER_SNAPSHOT, Math.round(deltaSecRaw)))
+          : DEFAULT_SECONDS_PER_SNAPSHOT;
+
+        const prevExisting = apps.get(prev.key);
+        if (prevExisting) {
+          prevExisting.totalSeconds += deltaSec;
+        } else {
+          apps.set(prev.key, {
+            appName: prev.appName,
+            ...(prev.domain ? { domain: prev.domain } : {}),
+            category: prev.category,
+            totalSeconds: deltaSec,
+            lastSeen: prev.ts,
+          });
+        }
+      }
+
+      prev = {
+        key,
+        appName: rawAppName,
+        ...(domain ? { domain } : {}),
+        category: categoryStr,
+        ts,
+        tsMs,
+      };
     } catch {
       // Ignore malformed rows
     }
+  }
+
+  // Give the last observed app a small default slice.
+  if (prev) {
+    const last = apps.get(prev.key);
+    if (last) last.totalSeconds += DEFAULT_SECONDS_PER_SNAPSHOT;
   }
 
   return Array.from(apps.values())

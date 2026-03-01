@@ -20,7 +20,7 @@ async function fetchWithNetworkError(
   }
 }
 
-const AGENT_CONFIG_VERSION = 16;
+const AGENT_CONFIG_VERSION = 18;
 
 const COACH_TURN_CONFIG = {
   // ElevenLabs enforces turn_timeout in [1, 30] seconds.
@@ -74,6 +74,45 @@ const UPDATE_TODO_TOOL = {
         // See: docs/error-patterns/elevenlabs-agent-422-tool-schema.md
         items: { type: 'string', description: 'An allowed app or website.' },
         description: 'Allowed apps/sites during this task. Omit to keep unchanged.',
+      },
+    },
+  },
+  expects_response: true,
+} as const;
+
+const UPDATE_TODOS_TOOL = {
+  type: 'client',
+  name: 'update_todos',
+  description:
+    'Update multiple existing tasks at once. Prefer this when the user wants to modify several tasks in one request (do not ask one-by-one if the info is already provided).',
+  parameters: {
+    type: 'object',
+    required: ['updates'],
+    properties: {
+      updates: {
+        type: 'array',
+        description: 'List of updates to apply.',
+        items: {
+          type: 'object',
+          required: ['todo_text'],
+          properties: {
+            todo_text: { type: 'string', description: 'The current text of the task to update (or a close match).' },
+            new_text: { type: 'string', description: 'New text for the task. Omit to keep unchanged.' },
+            deadline: { type: 'string', description: 'Deadline time. Prefer HH:MM 24-hour format (e.g. "17:00"), but short forms like "10pm" are OK. For relative times, use deadline_offset_minutes instead. Omit to keep unchanged.' },
+            app: { type: 'string', description: 'App name to associate. Omit to keep unchanged.' },
+            start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24-hour format (e.g. "14:00"), but short forms like "now" or "10am" are OK. For relative times, use start_offset_minutes instead. Omit to keep unchanged.' },
+            duration_minutes: { type: 'number', description: 'Duration in minutes. Omit to keep unchanged.' },
+            start_offset_minutes: { type: 'number', description: 'Minutes from now to start. Use 0 for "now", 30 for "in 30 min". Prefer this over start_time for relative times. Omit to keep unchanged.' },
+            deadline_offset_minutes: { type: 'number', description: 'Minutes from now for deadline. Use 60 for "in 1 hour", 120 for "in 2 hours". Prefer this over deadline for relative times. Omit to keep unchanged.' },
+            url: { type: 'string', description: 'Relevant URL. Omit to keep unchanged.' },
+            order: { type: 'number', description: 'Numeric sort order. Only set when explicitly reordering tasks.' },
+            allowed_apps: {
+              type: 'array',
+              items: { type: 'string', description: 'An allowed app or website.' },
+              description: 'Allowed apps/sites during this task. Omit to keep unchanged.',
+            },
+          },
+        },
       },
     },
   },
@@ -156,7 +195,141 @@ const ADD_TODO_TOOL = {
   expects_response: true,
 } as const;
 
-const ALL_TOOLS = [SKIP_TURN_TOOL, LIST_TODOS_TOOL, ADD_TODO_TOOL, UPDATE_TODO_TOOL, DELETE_TODO_TOOL, TOGGLE_TODO_TOOL];
+const ADD_TODOS_TOOL = {
+  type: 'client',
+  name: 'add_todos',
+  description:
+    'Add multiple new tasks at once. Prefer this over calling add_todo repeatedly when the user lists several tasks (especially with shared timing like "all start now" or "2-hour blocks"). Each task must include start_time + deadline (or enough info to calculate both).',
+  parameters: {
+    type: 'object',
+    required: ['tasks'],
+    properties: {
+      defaults: {
+        type: 'object',
+        description:
+          'Optional defaults applied to every task unless the task overrides them (useful when all tasks share the same timing).',
+        properties: {
+          duration_minutes: {
+            type: 'number',
+            description:
+              'Default duration in minutes (e.g. 120). Use when the user gives a shared duration for all tasks.',
+          },
+          start_time: {
+            type: 'string',
+            description:
+              'Default start time for all tasks. Prefer HH:MM 24-hour format (e.g. "14:00"), but short forms like "now" are OK. For relative times, prefer start_offset_minutes.',
+          },
+          deadline: {
+            type: 'string',
+            description:
+              'Default deadline/end time for all tasks. Prefer HH:MM 24-hour format (e.g. "16:00"), but short forms like "in 2 hours" are OK. For relative times, prefer deadline_offset_minutes.',
+          },
+          start_offset_minutes: {
+            type: 'number',
+            description:
+              'Default minutes from now to start (0 = now). Prefer this over start_time for relative times.',
+          },
+          deadline_offset_minutes: {
+            type: 'number',
+            description:
+              'Default minutes from now for deadline (e.g. 120 = in 2 hours). Prefer this over deadline for relative times.',
+          },
+        },
+      },
+      tasks: {
+        type: 'array',
+        description: 'List of tasks to add.',
+        items: {
+          type: 'object',
+          required: ['text'],
+          properties: {
+            text: { type: 'string', description: 'Task description.' },
+            duration_minutes: {
+              type: 'number',
+              description:
+                'Duration in minutes. Usually inherited from defaults; only set per-task if it differs.',
+            },
+            start_time: {
+              type: 'string',
+              description:
+                'Start time. Prefer HH:MM 24-hour format (e.g. "14:00"), but short forms like "now" are OK. For relative times, prefer start_offset_minutes.',
+            },
+            deadline: {
+              type: 'string',
+              description:
+                'Deadline/end time. Prefer HH:MM 24-hour format (e.g. "16:00"), but short forms like "10pm" are OK. For relative times, prefer deadline_offset_minutes.',
+            },
+            start_offset_minutes: {
+              type: 'number',
+              description:
+                'Minutes from now to start. Use 0 for "now", 30 for "in 30 min". Prefer this over start_time for relative times.',
+            },
+            deadline_offset_minutes: {
+              type: 'number',
+              description:
+                'Minutes from now for deadline. Use 120 for "in 2 hours". Prefer this over deadline for relative times.',
+            },
+            app: { type: 'string', description: 'Primary app (e.g. "VS Code", "Chrome"). Omit if not discussed.' },
+            url: { type: 'string', description: 'Relevant URL. Omit if not discussed.' },
+            allowed_apps: {
+              type: 'array',
+              items: { type: 'string', description: 'An allowed app or website.' },
+              description: 'Allowed apps/sites during this task. Omit if not discussed.',
+            },
+          },
+        },
+      },
+    },
+  },
+  expects_response: true,
+} as const;
+
+const SEQUENCE_TODOS_TOOL = {
+  type: 'client',
+  name: 'sequence_todos',
+  description:
+    'Reschedule tasks sequentially (one after another) using a shared block duration. Use when the user says "do them sequentially / one at a time / in this order".',
+  parameters: {
+    type: 'object',
+    required: ['todo_texts', 'duration_minutes'],
+    properties: {
+      todo_texts: {
+        type: 'array',
+        items: { type: 'string', description: 'A task name from the user\'s todo list.' },
+        description: 'Task names in the desired order (first → last).',
+      },
+      duration_minutes: {
+        type: 'number',
+        description: 'Block duration in minutes for EACH task (e.g. 120).',
+      },
+      start_time: {
+        type: 'string',
+        description: 'Start time for the first task. Prefer HH:MM 24-hour, but "now" is OK. For relative times, prefer start_offset_minutes.',
+      },
+      start_offset_minutes: {
+        type: 'number',
+        description: 'Minutes from now to start the first task (0 = now). Prefer this over start_time for relative times.',
+      },
+      reorder_list: {
+        type: 'boolean',
+        description: 'If true, reorder the todo list to match todo_texts order. Default: true.',
+      },
+    },
+  },
+  expects_response: true,
+} as const;
+
+const ALL_TOOLS = [
+  SKIP_TURN_TOOL,
+  LIST_TODOS_TOOL,
+  ADD_TODO_TOOL,
+  ADD_TODOS_TOOL,
+  UPDATE_TODOS_TOOL,
+  SEQUENCE_TODOS_TOOL,
+  UPDATE_TODO_TOOL,
+  DELETE_TODO_TOOL,
+  TOGGLE_TODO_TOOL,
+];
 
 export const ELEVENLABS_AGENT_TOOLS = ALL_TOOLS;
 
@@ -189,10 +362,10 @@ function buildCoachPrompt(
         'Profanity OK (18+). No slurs/hate/threats. Do not insult identity; roast the procrastination loop. Avoid shame/guilt (ADHD-aware).',
         'The user\'s current tasks are: {{existing_todos}}. Refer to these if relevant; do not re-add tasks that already exist.',
         'Scope: computer tasks only. If they mention offline stuff, acknowledge briefly and pivot to a computer next step.',
-        'Tasks: for each task, collect: (1) task description, (2) start time, (3) end time/deadline. Do NOT call add_todo until you have both start time and deadline (or one time + duration). Duration is auto-calculated - never ask for it. Timing can be relative or exact; do not require HH:MM format. When calling tools, convert times to HH:MM 24h or use offset_minutes fields.',
-        'Tools: if you have enough info, call add_todo (or update_todo for an existing task) BEFORE replying. Then reply with the tool response verbatim. Never claim you added/updated/deleted a task unless a tool call succeeded. If a time is missing, ask exactly 1 short question to get it. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
+        'Tasks: collect (1) task description, (2) start time, (3) end time/deadline. If the user lists multiple tasks, keep ALL of them (do not stop at 3). If they give shared timing like "all start now" / "two-hour blocks", apply it to every listed task (unless they specify exceptions).',
+        'Tools: add: prefer add_todos (defaults + tasks list) to add ALL tasks at once. update: prefer update_todos for multi-task edits, and prefer sequence_todos for "sequential / one-at-a-time / in this order" rescheduling. Use add_todo/update_todo only for single tasks. Never claim you added/updated/deleted tasks unless a tool call succeeded. If timing is missing, ask exactly 1 short question that covers all tasks (not one-by-one). Do not say "I can only update one task at a time" - you can batch. Convert times to HH:MM 24h or use offset_minutes fields. If silence/thinking, use skip_turn.',
       ].join(' '),
-      firstMessage: 'Top 3 computer tasks today — go.',
+      firstMessage: 'Computer tasks today — list them. (More than 3 is fine.)',
     };
   }
 
@@ -203,10 +376,10 @@ function buildCoachPrompt(
         'Never shame/blame (ADHD-aware).',
         'The user\'s current tasks are: {{existing_todos}}. Refer to these if relevant; do not re-add tasks that already exist.',
         'Scope: computer tasks only. If they mention offline stuff, acknowledge briefly and pivot to a computer next step.',
-        'Tasks: for each task, collect: (1) task description, (2) start time, (3) end time/deadline. Do NOT call add_todo until you have both start time and deadline (or one time + duration). Duration is auto-calculated - never ask for it. Timing can be relative or exact; do not require HH:MM format. When calling tools, convert times to HH:MM 24h or use offset_minutes fields.',
-        'Tools: if you have enough info, call add_todo (or update_todo for an existing task) BEFORE replying. Then reply with the tool response verbatim. Never claim you added/updated/deleted a task unless a tool call succeeded. If a time is missing, ask exactly 1 short question to get it. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
+        'Tasks: collect (1) task description, (2) start time, (3) end time/deadline. If the user lists multiple tasks, keep ALL of them. If they give shared timing like "all start now" / "two-hour blocks", apply it to every listed task (unless they specify exceptions).',
+        'Tools: add: prefer add_todos (defaults + tasks list) to add ALL tasks at once. update: prefer update_todos for multi-task edits, and prefer sequence_todos for "sequential / one-at-a-time / in this order" rescheduling. Use add_todo/update_todo only for single tasks. Never claim you added/updated/deleted tasks unless a tool call succeeded. If timing is missing, ask exactly 1 short question that covers all tasks (not one-by-one). Do not say "I can only update one task at a time" - you can batch. Convert times to HH:MM 24h or use offset_minutes fields. If silence/thinking, use skip_turn.',
       ].join(' '),
-    firstMessage: 'What computer task are you doing next - when does it start and when is it due?',
+    firstMessage: 'What computer tasks do you need to do today? List them.',
   };
 }
 

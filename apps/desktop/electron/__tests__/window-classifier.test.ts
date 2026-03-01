@@ -26,6 +26,11 @@ describe('window-classifier', () => {
       expect(extractDomain(undefined, '(2) Instagram - Google Chrome')).toBe('instagram.com');
       expect(extractDomain(undefined, '(12) Gmail - Google Chrome')).toBe('mail.google.com');
     });
+
+    it('extracts domains embedded in longer segments', () => {
+      expect(extractDomain(undefined, 'reddit.com: the front page of the internet - Google Chrome')).toBe('reddit.com');
+      expect(extractDomain(undefined, 'OpenAI (chatgpt.com) - Google Chrome')).toBe('chatgpt.com');
+    });
   });
 
   describe('classifyApp', () => {
@@ -35,6 +40,14 @@ describe('window-classifier', () => {
       // YouTube is treated as 50/50; content classification happens via vision.
       expect(classifyApp('msedge.exe', rules, 'Some video — YouTube — Microsoft Edge')).toBe('neutral');
       expect(classifyApp('brave.exe', rules, 'My doc - Google Docs - Brave')).toBe('productive');
+    });
+
+    it('prefers domain rules over browser app rules', () => {
+      const customRules = [
+        { id: 'app-chrome-prod', matchType: 'app' as const, pattern: 'Google Chrome', category: 'productive' as const },
+        { id: 'domain-reddit', matchType: 'title' as const, pattern: 'reddit.com', category: 'entertainment' as const },
+      ];
+      expect(classifyApp('Google Chrome', customRules, 'Home | Reddit | Google Chrome')).toBe('entertainment');
     });
   });
 });

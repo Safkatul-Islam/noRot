@@ -185,7 +185,7 @@ def get_app_stats(minutes: int | None = None) -> list[dict]:
 
     Each snapshot contains a JSON 'data' field with activeApp, activeCategory,
     and optionally activeDomain. We count occurrences as a proxy for time
-    (each snapshot represents ~5 seconds of activity).
+    (each snapshot represents ~10 seconds of activity).
 
     Returns rows sorted by count descending.
     """
@@ -250,9 +250,7 @@ def get_wins_data() -> dict:
         refocus_count = cursor.fetchone()[0]
 
         # Get latest snapshot's productive minutes
-        cursor.execute(
-            "SELECT data FROM snapshots ORDER BY id DESC LIMIT 1"
-        )
+        cursor.execute("SELECT data FROM snapshots ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
 
     total_focused_minutes = 0

@@ -17,7 +17,10 @@ export function hasInterventionGapElapsed(opts: {
   now: number;
   minGapMs?: number;
 }): boolean {
-  const minGapMs = typeof opts.minGapMs === 'number' && Number.isFinite(opts.minGapMs) ? Math.max(0, opts.minGapMs) : 5_000;
+  const minGapMs =
+    typeof opts.minGapMs === 'number' && Number.isFinite(opts.minGapMs)
+      ? Math.max(0, opts.minGapMs)
+      : 10_000;
   if (!Number.isFinite(opts.lastShownAt) || opts.lastShownAt <= 0) return true;
   return opts.now - opts.lastShownAt >= minGapMs;
 }

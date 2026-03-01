@@ -5,7 +5,7 @@ import { IPC_CHANNELS } from './types';
 import * as database from './database';
 import * as orchestrator from './orchestrator';
 import type { InterventionEvent, Severity, ChatMessage, TodoItem, TTSSettings, UsageCategories } from '@norot/shared';
-import { generateScript, streamChat, extractTodosWithApps } from './gemini-client';
+import { generateScript, streamChat, extractTodosWithApps, titleizeTodoTexts } from './gemini-client';
 import { buildInterventionText } from './intervention-text';
 import { clearContextCache } from './context-checker';
 import { closeInterventionOverlayWindow, getMainWindow, getTodoWindow, setTodoWindow, createTodoOverlayWindow, showInterventionOverlayWindow } from './window-manager';
@@ -509,6 +509,24 @@ export function registerIpcHandlers(): void {
     const settings = database.getSettings();
     if (!settings.geminiApiKey) return [];
     return extractTodosWithApps(settings.geminiApiKey, transcript, settings.timeZone);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.TITLEIZE_TODO_TEXTS, async (_event, texts: unknown) => {
+    const list = Array.isArray(texts) ? texts : [];
+    const cleaned = list
+      .map((t) => (typeof t === 'string' ? t.trim() : ''))
+      .filter((t) => t.length > 0)
+      .slice(0, 30);
+
+    // Always return an array so the renderer can fall back safely.
+    if (cleaned.length === 0) return [];
+
+    const settings = database.getSettings();
+    const apiKey = typeof settings.geminiApiKey === 'string' ? settings.geminiApiKey.trim() : '';
+    if (!apiKey) return cleaned;
+
+    const titled = await titleizeTodoTexts(apiKey, cleaned);
+    return Array.isArray(titled) && titled.length === cleaned.length ? titled : cleaned;
   });
 
   ipcMain.handle(IPC_CHANNELS.GET_TODOS, () => {

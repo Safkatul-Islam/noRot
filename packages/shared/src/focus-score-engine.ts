@@ -4,12 +4,35 @@ import type { UsageCategories } from './types.js';
 // 5 discrete levels: 0 = "Locked In" (best), 4 = "Cooked" (worst)
 // Distraction: drops one level every 5 seconds
 // Recovery: recovers one level every 5 seconds of productive use
+// - returning to level 0 ("Locked In") requires 10 seconds of productive use
 // Neutral: pauses recovery timer without resetting it
 
 const LEVEL_TO_SCORE = [100, 75, 50, 25, 0] as const;
 const STEP_INTERVAL_MS = 5_000; // 5 seconds per distraction level
 const RECOVERY_STEP_INTERVAL_MS = 5_000; // 5 seconds per recovery level
+const LOCKED_IN_RECOVERY_STEP_INTERVAL_MS = 10_000; // 10 seconds to return to level 0
 const MAX_LEVEL = 4;
+
+function computeRecoveredLevel(opts: { levelAtFocusStart: number; focusedTimeMs: number }): number {
+  const startLevel = Math.max(0, Math.min(opts.levelAtFocusStart, MAX_LEVEL));
+  const t = Math.max(0, opts.focusedTimeMs);
+  if (startLevel <= 0) return 0;
+
+  // Special-case the final step back to "Locked In" so it doesn't bounce to 100 too quickly.
+  if (startLevel === 1) {
+    return t >= LOCKED_IN_RECOVERY_STEP_INTERVAL_MS ? 0 : 1;
+  }
+
+  // For levels 2-4: recover down to level 1 at the normal cadence, then require the locked-in window.
+  const timeToReachLevel1 = (startLevel - 1) * RECOVERY_STEP_INTERVAL_MS;
+  if (t < timeToReachLevel1) {
+    const stepsRecovered = Math.floor(t / RECOVERY_STEP_INTERVAL_MS);
+    return Math.max(1, startLevel - stepsRecovered);
+  }
+
+  const remainingMs = t - timeToReachLevel1;
+  return remainingMs >= LOCKED_IN_RECOVERY_STEP_INTERVAL_MS ? 0 : 1;
+}
 
 export interface FocusScoreTickInput {
   activeCategory: UsageCategories['activeCategory'];
@@ -99,10 +122,13 @@ export class FocusScoreEngine {
       const steps = Math.floor(this.timeInCurrentStateMs / STEP_INTERVAL_MS);
       this.currentLevel = Math.min(this.levelAtDistractionStart + steps, MAX_LEVEL);
     } else if (tickType === 'focused') {
-      // Accumulate productive time and recover one level every 2 seconds
+      // Accumulate productive time and recover one level every 5 seconds.
+      // Returning to level 0 (Locked In) requires 10 seconds.
       this.focusedTimeMs += elapsedMs;
-      const stepsRecovered = Math.floor(this.focusedTimeMs / RECOVERY_STEP_INTERVAL_MS);
-      this.currentLevel = Math.max(0, this.levelAtFocusStart - stepsRecovered);
+      this.currentLevel = computeRecoveredLevel({
+        levelAtFocusStart: this.levelAtFocusStart,
+        focusedTimeMs: this.focusedTimeMs,
+      });
     }
     // neutral: no change to currentLevel or focusedTimeMs
 

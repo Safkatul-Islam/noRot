@@ -202,6 +202,15 @@ export const mockNorotAPI: NoRotAPI = {
       allowedApps: ['VS Code', 'Terminal', 'Chrome'],
     },
   ] as TodoItem[],
+
+  titleizeTodos: async (texts: string[]) => {
+    const cleaned = Array.isArray(texts)
+      ? texts.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean).slice(0, 30)
+      : [];
+    // In dev/mock mode, just return cleaned (Gemini runs in main process in Electron).
+    // Keep this behavior stable so voice tools remain deterministic in tests.
+    return cleaned;
+  },
   getTodos: async () => [...mockTodos],
   addTodo: async (item: TodoItem) => {
     mockTodos.push(item);

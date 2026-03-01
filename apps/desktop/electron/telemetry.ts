@@ -95,6 +95,8 @@ export function createTelemetryCollector(
   let lastPollTime = Date.now();
   let lastAppName = '';
   let tickCount = 0;
+  // We poll active window every 1s; emit a stored UsageSnapshot less frequently.
+  const SNAPSHOT_EVERY_TICKS = 10; // ~10 seconds
   const snoozeTimestamps: number[] = [];
 
   // Rolling time slices for distraction ratio (short window for responsiveness)
@@ -423,8 +425,8 @@ export function createTelemetryCollector(
       sessionReset: false,
     });
 
-    // Emit snapshot every 5 ticks (5 seconds)
-    if (tickCount % 5 === 0) {
+    // Emit snapshot every 10 ticks (~10 seconds)
+    if (tickCount % SNAPSHOT_EVERY_TICKS === 0) {
       const sessionMinutes = parseFloat(((now - sessionStartTime) / 60000).toFixed(2));
       const distractingMinutes = parseFloat((distractingMs / 60000).toFixed(2));
       const productiveMinutes = parseFloat((productiveMs / 60000).toFixed(2));

@@ -55,6 +55,8 @@ export function extractDomain(url?: string, title?: string): string | undefined 
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const DOMAIN_REGEX = /\b(?:[a-z0-9-]+\.)+[a-z]{2,24}\b/i;
+
     // Check segments from the end (domain is usually near the end)
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = stripNotifCount(segments[i]).toLowerCase();
@@ -64,9 +66,16 @@ export function extractDomain(url?: string, title?: string): string | undefined 
         if (seg === name || seg.startsWith(name + ' ')) return domain;
       }
 
-      // Check for domain-like patterns (contains dot, no spaces)
+      // Check for domain-like patterns
+      // 1) Plain domain token (contains dot, no spaces)
       if (seg.includes('.') && !seg.includes(' ')) {
         return seg.replace(/^www\./, '');
+      }
+
+      // 2) Domain embedded in a longer segment (e.g. "reddit.com: ...")
+      const embedded = DOMAIN_REGEX.exec(seg);
+      if (embedded?.[0]) {
+        return embedded[0].replace(/^www\./, '');
       }
     }
   }
@@ -82,36 +91,41 @@ export function classifyApp(
 ): 'productive' | 'neutral' | 'social' | 'entertainment' {
   const lower = appName.toLowerCase();
   const browser = isBrowser(appName);
-  let browserNeutralMatched = false;
 
-  // First pass: check app-name rules
-  for (const rule of rules) {
-    if (rule.matchType !== 'app') continue;
-    if (lower.includes(rule.pattern.toLowerCase())) {
-      // For browsers, a neutral app-level rule shouldn't block domain/title rules.
-      // This keeps "Google Chrome" neutral while still classifying "Chrome (youtube.com)" as entertainment, etc.
-      if (browser && rule.category === 'neutral') {
-        browserNeutralMatched = true;
-        continue;
-      }
-      return rule.category;
-    }
-  }
-
-  // Second pass: if it's a browser, extract domain and check title rules
+  // For browsers: domain/title rules are more specific than app rules, so check them first.
   if (browser && (windowTitle || windowUrl)) {
     const domain = extractDomain(windowUrl, windowTitle);
     if (domain) {
+      const domainLower = domain.toLowerCase();
+
+      // Prefer exact title-rule matches, then substring matches.
       for (const rule of rules) {
         if (rule.matchType !== 'title') continue;
-        if (domain.includes(rule.pattern.toLowerCase())) {
-          return rule.category;
-        }
+        const pat = rule.pattern.trim().toLowerCase();
+        if (pat && domainLower === pat) return rule.category;
+      }
+      for (const rule of rules) {
+        if (rule.matchType !== 'title') continue;
+        const pat = rule.pattern.trim().toLowerCase();
+        if (pat && domainLower.includes(pat)) return rule.category;
       }
     }
   }
 
-  if (browser && browserNeutralMatched) return 'neutral';
+  // App-name rules (exact match preferred, then substring)
+  for (const rule of rules) {
+    if (rule.matchType !== 'app') continue;
+    const pat = rule.pattern.trim().toLowerCase();
+    if (pat && lower === pat) return rule.category;
+  }
+  for (const rule of rules) {
+    if (rule.matchType !== 'app') continue;
+    const pat = rule.pattern.trim().toLowerCase();
+    if (pat && lower.includes(pat)) return rule.category;
+  }
+
+  // Defaults
+  if (browser) return 'neutral';
 
   // Default: treat unknown apps as productive. (Neutral is reserved for explicitly-marked 50/50 apps like browsers.)
   return 'productive';

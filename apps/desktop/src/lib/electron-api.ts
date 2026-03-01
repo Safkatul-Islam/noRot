@@ -109,6 +109,8 @@ export interface NoRotAPI {
 
   // Todos
   extractTodos(transcript: string): Promise<TodoItem[]>;
+  /** Best-effort: shorten task texts into short todo titles (Gemini-backed when configured). */
+  titleizeTodos?(texts: string[]): Promise<string[]>;
   getTodos(): Promise<TodoItem[]>;
   addTodo(item: TodoItem): Promise<void>;
   toggleTodo(id: string): Promise<void>;

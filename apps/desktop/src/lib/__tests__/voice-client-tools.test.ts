@@ -178,6 +178,57 @@ describe('createTodoClientTools', () => {
     });
   });
 
+  describe('add_todos', () => {
+    it('adds multiple tasks with shared defaults', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todos({
+        defaults: { start_time: '14:00', duration_minutes: 120 },
+        tasks: [
+          { text: 'Computer science homework' },
+          { text: 'Online math homework (Canvas)' },
+          { text: 'Linguistics reading' },
+        ],
+      });
+
+      expect(result).toContain('Added 3 tasks');
+      expect(result).toContain('2h');
+      expect(result).toContain('2:00 PM');
+      expect(result).toContain('4:00 PM');
+      expect(backend.addTodo).toHaveBeenCalledTimes(3);
+
+      const added = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[0] as TodoItem);
+
+      expect(added[0]?.order).toBe(0);
+      expect(added[1]?.order).toBe(1);
+      expect(added[2]?.order).toBe(2);
+
+      for (const item of added) {
+        expect(item.startTime).toBe('14:00');
+        expect(item.deadline).toBe('16:00');
+        expect(item.durationMinutes).toBe(120);
+      }
+    });
+
+    it('is atomic: does not add any tasks when some are missing timing', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todos({
+        tasks: [
+          { text: 'Task A', start_time: '09:00', duration_minutes: 60 },
+          { text: 'Task B' },
+        ],
+      });
+
+      expect(result.toLowerCase()).toContain('missing timing');
+      expect(result).toContain('Task B');
+      expect(backend.addTodo).not.toHaveBeenCalled();
+    });
+  });
+
   describe('list_todos', () => {
     it('returns combined list from backend', async () => {
       const todos = [
@@ -249,6 +300,82 @@ describe('createTodoClientTools', () => {
       const result = await tools.update_todo({ todo_text: 'nonexistent' });
 
       expect(result).toContain('Could not find');
+    });
+  });
+
+  describe('update_todos', () => {
+    it('updates multiple todos in one call', async () => {
+      const a = makeTodo({ id: 'a', text: 'Math homework' });
+      const b = makeTodo({ id: 'b', text: 'Physics homework' });
+      const backend = createMockBackend([a, b]);
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.update_todos({
+        updates: [
+          { todo_text: 'Math homework', new_text: 'Math homework (Canvas)', duration_minutes: 120 },
+          { todo_text: 'Physics homework', duration_minutes: 90 },
+        ],
+      });
+
+      expect(result).toContain('Updated 2 tasks');
+      expect(backend.updateTodo).toHaveBeenCalledTimes(2);
+      expect(backend.updateTodo).toHaveBeenCalledWith('a', expect.objectContaining({
+        text: 'Math homework (Canvas)',
+        durationMinutes: 120,
+      }));
+      expect(backend.updateTodo).toHaveBeenCalledWith('b', expect.objectContaining({
+        durationMinutes: 90,
+      }));
+    });
+
+    it('is atomic: does not update any tasks when some are missing', async () => {
+      const a = makeTodo({ id: 'a', text: 'Math homework' });
+      const backend = createMockBackend([a]);
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.update_todos({
+        updates: [
+          { todo_text: 'Math homework', duration_minutes: 120 },
+          { todo_text: 'Nonexistent task', duration_minutes: 60 },
+        ],
+      });
+
+      expect(result).toContain('Could not find');
+      expect(backend.updateTodo).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('sequence_todos', () => {
+    it('schedules tasks sequentially with fixed blocks', async () => {
+      const a = makeTodo({ id: 'a', text: 'Math homework', order: 0 });
+      const b = makeTodo({ id: 'b', text: 'Physics homework', order: 1 });
+      const c = makeTodo({ id: 'c', text: 'Linguistics homework', order: 2 });
+      const backend = createMockBackend([a, b, c]);
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.sequence_todos({
+        todo_texts: ['Math homework', 'Physics homework', 'Linguistics homework'],
+        duration_minutes: 120,
+        start_time: '14:00',
+        reorder_list: false,
+      });
+
+      expect(result).toContain('Sequenced 3 tasks');
+      expect(backend.updateTodo).toHaveBeenCalledWith('a', expect.objectContaining({
+        startTime: '14:00',
+        deadline: '16:00',
+        durationMinutes: 120,
+      }));
+      expect(backend.updateTodo).toHaveBeenCalledWith('b', expect.objectContaining({
+        startTime: '16:00',
+        deadline: '18:00',
+        durationMinutes: 120,
+      }));
+      expect(backend.updateTodo).toHaveBeenCalledWith('c', expect.objectContaining({
+        startTime: '18:00',
+        deadline: '20:00',
+        durationMinutes: 120,
+      }));
     });
   });
 

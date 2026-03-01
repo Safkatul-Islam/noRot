@@ -31,8 +31,8 @@ describe('intervention-guard', () => {
   });
 
   it('enforces a minimum gap between interventions', () => {
-    expect(hasInterventionGapElapsed({ lastShownAt: 0, now: 1000, minGapMs: 5000 })).toBe(true);
-    expect(hasInterventionGapElapsed({ lastShownAt: 1000, now: 5500, minGapMs: 5000 })).toBe(false);
-    expect(hasInterventionGapElapsed({ lastShownAt: 1000, now: 6500, minGapMs: 5000 })).toBe(true);
+    expect(hasInterventionGapElapsed({ lastShownAt: 0, now: 1000, minGapMs: 10_000 })).toBe(true);
+    expect(hasInterventionGapElapsed({ lastShownAt: 1000, now: 10_500, minGapMs: 10_000 })).toBe(false);
+    expect(hasInterventionGapElapsed({ lastShownAt: 1000, now: 11_500, minGapMs: 10_000 })).toBe(true);
   });
 });

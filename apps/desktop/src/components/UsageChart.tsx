@@ -27,19 +27,33 @@ export function UsageChart() {
 
   useEffect(() => {
     const api = getNorotAPI();
-    api.getUsageHistory().then(
-      (history: { timestamp: string; productive: number; distracting: number }[]) => {
-        setData(
-          history.map((p) => ({
-            ...p,
-            label: new Date(p.timestamp).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-          }))
-        );
-      }
-    );
+    let cancelled = false;
+
+    const fetchHistory = () => {
+      api.getUsageHistory()
+        .then((history: { timestamp: string; productive: number; distracting: number }[]) => {
+          if (cancelled) return;
+          setData(
+            history.map((p) => ({
+              ...p,
+              label: new Date(p.timestamp).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            }))
+          );
+        })
+        .catch(() => {
+          // ignore
+        });
+    };
+
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   if (data.length === 0) {
