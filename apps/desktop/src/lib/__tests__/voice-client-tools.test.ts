@@ -78,16 +78,18 @@ describe('createTodoClientTools', () => {
         app: 'Google Docs',
       });
 
-       expect(result).toContain('Added task: "Write essay"');
-       expect(result).toContain('2h');
-       expect(result).toContain('2:00 PM');
-       expect(result).toContain('Google Docs');
-       expect(backend.addTodo).toHaveBeenCalledOnce();
+      expect(result).toContain('Added task: "Write essay"');
+      expect(result).toContain('2h');
+      expect(result).toContain('2:00 PM');
+      expect(result).toContain('4:00 PM');
+      expect(result).toContain('Google Docs');
+      expect(backend.addTodo).toHaveBeenCalledOnce();
 
       const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
       expect(addedItem.text).toBe('Write essay');
       expect(addedItem.durationMinutes).toBe(120);
       expect(addedItem.startTime).toBe('14:00');
+      expect(addedItem.deadline).toBe('16:00');
       expect(addedItem.app).toBe('Google Docs');
       expect(addedItem.done).toBe(false);
       expect(addedItem.id).toBeTruthy();
@@ -103,12 +105,70 @@ describe('createTodoClientTools', () => {
       expect(backend.addTodo).not.toHaveBeenCalled();
     });
 
+    it('rejects when no timing info is provided', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todo({ text: 'No times' });
+
+      expect(result.toLowerCase()).toContain('missing');
+      expect(result.toLowerCase()).toContain('start');
+      expect(result.toLowerCase()).toContain('deadline');
+      expect(backend.addTodo).not.toHaveBeenCalled();
+    });
+
+    it('rejects when only start_time is provided', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todo({ text: 'Only start', start_time: '14:00' });
+
+      expect(result.toLowerCase()).toContain('missing');
+      expect(result.toLowerCase()).toContain('deadline');
+      expect(backend.addTodo).not.toHaveBeenCalled();
+    });
+
+    it('rejects when only deadline is provided', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todo({ text: 'Only deadline', deadline: '16:00' });
+
+      expect(result.toLowerCase()).toContain('missing');
+      expect(result.toLowerCase()).toContain('start');
+      expect(backend.addTodo).not.toHaveBeenCalled();
+    });
+
+    it('rejects when only duration is provided', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      const result = await tools.add_todo({ text: 'Only duration', duration_minutes: 30 });
+
+      expect(result.toLowerCase()).toContain('missing');
+      expect(result.toLowerCase()).toContain('start');
+      expect(result.toLowerCase()).toContain('deadline');
+      expect(backend.addTodo).not.toHaveBeenCalled();
+    });
+
+    it('accepts deadline + duration and infers start time (wrap-around)', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Infer start', deadline: '01:00', duration_minutes: 120 });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.startTime).toBe('23:00');
+      expect(addedItem.deadline).toBe('01:00');
+      expect(addedItem.durationMinutes).toBe(120);
+    });
+
     it('assigns order after existing todos', async () => {
       const existing = makeTodo({ order: 5 });
       const backend = createMockBackend([existing]);
       const tools = createTodoClientTools(backend);
 
-      await tools.add_todo({ text: 'New task' });
+      await tools.add_todo({ text: 'New task', start_time: '09:00', deadline: '10:00' });
 
       const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
       expect(addedItem.order).toBe(6);
@@ -213,6 +273,60 @@ describe('createTodoClientTools', () => {
       expect(result).toContain('Marked');
       expect(result).toContain('done');
       expect(backend.toggleTodo).toHaveBeenCalledWith('abc');
+    });
+  });
+
+  describe('offset fallback and duration inference', () => {
+    it('uses deadline_offset_minutes when no deadline string', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Offset task', deadline_offset_minutes: 120, duration_minutes: 30 });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.deadline).toMatch(/^\d{2}:\d{2}$/);
+      expect(addedItem.startTime).toMatch(/^\d{2}:\d{2}$/);
+    });
+
+    it('prefers deadline string over offset when both provided', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Both task', start_time: '16:00', deadline: '17:00', deadline_offset_minutes: 120 });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.deadline).toBe('17:00');
+    });
+
+    it('parses messy LLM deadline strings', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Messy task', deadline: 'by 10pm tonight', duration_minutes: 60 });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.deadline).toBe('22:00');
+      expect(addedItem.startTime).toBe('21:00');
+    });
+
+    it('infers duration from start + deadline', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Infer duration', start_time: '14:00', deadline: '16:00' });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.durationMinutes).toBe(120);
+    });
+
+    it('infers deadline from start + duration', async () => {
+      const backend = createMockBackend();
+      const tools = createTodoClientTools(backend);
+
+      await tools.add_todo({ text: 'Infer deadline', start_time: '14:00', duration_minutes: 120 });
+
+      const addedItem = (backend.addTodo as ReturnType<typeof vi.fn>).mock.calls[0][0] as TodoItem;
+      expect(addedItem.deadline).toBe('16:00');
     });
   });
 });

@@ -20,7 +20,7 @@ async function fetchWithNetworkError(
   }
 }
 
-const AGENT_CONFIG_VERSION = 12;
+const AGENT_CONFIG_VERSION = 16;
 
 const COACH_TURN_CONFIG = {
   // ElevenLabs enforces turn_timeout in [1, 30] seconds.
@@ -55,10 +55,18 @@ const UPDATE_TODO_TOOL = {
     properties: {
       todo_text: { type: 'string', description: 'The current text of the task to update (or a close match).' },
       new_text: { type: 'string', description: 'New text for the task. Omit to keep unchanged.' },
-      deadline: { type: 'string', description: 'New deadline time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 2 hours". Omit to keep unchanged.' },
+      deadline: { type: 'string', description: 'Deadline time. Prefer HH:MM 24-hour format (e.g. "17:00", "22:00"), but short forms like "10pm" are OK. For relative times, use deadline_offset_minutes instead. Omit to keep unchanged.' },
       app: { type: 'string', description: 'App name to associate. Omit to keep unchanged.' },
-      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 30 minutes". Omit to keep unchanged.' },
+      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24-hour format (e.g. "14:00", "09:30"), but short forms like "now" or "10am" are OK. For relative times, use start_offset_minutes instead. Omit to keep unchanged.' },
       duration_minutes: { type: 'number', description: 'Duration in minutes. Omit to keep unchanged.' },
+      start_offset_minutes: {
+        type: 'number',
+        description: 'Minutes from now to start. Use 0 for "now", 30 for "in 30 min". Prefer this over start_time for relative times. Omit to keep unchanged.',
+      },
+      deadline_offset_minutes: {
+        type: 'number',
+        description: 'Minutes from now for deadline. Use 60 for "in 1 hour", 120 for "in 2 hours". Prefer this over deadline for relative times. Omit to keep unchanged.',
+      },
       url: { type: 'string', description: 'Relevant URL. Omit to keep unchanged.' },
       allowed_apps: {
         type: 'array',
@@ -117,17 +125,25 @@ const LIST_TODOS_TOOL = {
 const ADD_TODO_TOOL = {
   type: 'client',
   name: 'add_todo',
-  description: "Add a new task to the user's draft list. Call this when the user mentions a task they need to do. Include timing/duration/app info if discussed.",
+  description: "Add a new task to the user's draft list. You MUST provide start_time AND deadline (or enough info to calculate both) before calling this tool. Do NOT call add_todo with only one time. Duration is auto-calculated - never ask for it.",
   parameters: {
     type: 'object',
     required: ['text'],
     properties: {
       text: { type: 'string', description: 'Task description.' },
-      duration_minutes: { type: 'number', description: 'Duration in minutes. Omit if not discussed.' },
-      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 30 minutes". Omit if not discussed.' },
-      deadline: { type: 'string', description: 'Deadline time. Prefer HH:MM 24h, but you may also use relative like "in 2 hours". Omit if not discussed.' },
+      duration_minutes: { type: 'number', description: 'Duration in minutes. Usually auto-calculated from start_time and deadline - only provide if the user gives a duration with one time endpoint.' },
+      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24-hour format (e.g. "14:00", "09:30"), but short forms like "now" or "10am" are OK. REQUIRED - must be provided or calculable (e.g. deadline + duration_minutes). For relative times, use start_offset_minutes instead.' },
+      deadline: { type: 'string', description: 'Deadline/end time. Prefer HH:MM 24-hour format (e.g. "17:00", "22:00"), but short forms like "10pm" are OK. REQUIRED - must be provided or calculable (e.g. start_time + duration_minutes). For relative times, use deadline_offset_minutes instead.' },
       app: { type: 'string', description: 'Primary app (e.g. "VS Code", "Chrome"). Omit if not discussed.' },
       url: { type: 'string', description: 'Relevant URL. Omit if not discussed.' },
+      start_offset_minutes: {
+        type: 'number',
+        description: 'Minutes from now to start. Use 0 for "now", 30 for "in 30 min". Prefer this over start_time for relative times.',
+      },
+      deadline_offset_minutes: {
+        type: 'number',
+        description: 'Minutes from now for deadline. Use 60 for "in 1 hour", 120 for "in 2 hours". Prefer this over deadline for relative times.',
+      },
       allowed_apps: {
         type: 'array',
         // ElevenLabs validates tool param schemas; string nodes must include a description (or similar metadata).
@@ -171,9 +187,10 @@ function buildCoachPrompt(
         `You are noRot, an aggressive, funny productivity coach with a ${style} style.`,
         'Be extremely concise: respond in 1 short sentence (max ~20 words). If you need info, ask exactly 1 short question.',
         'Profanity OK (18+). No slurs/hate/threats. Do not insult identity; roast the procrastination loop. Avoid shame/guilt (ADHD-aware).',
+        'The user\'s current tasks are: {{existing_todos}}. Refer to these if relevant; do not re-add tasks that already exist.',
         'Scope: computer tasks only. If they mention offline stuff, acknowledge briefly and pivot to a computer next step.',
-        'Tasks: get (task, rough duration, start time or deadline). Timing can be relative or exact; do not ask for HH:MM format.',
-        'Tools: when a concrete computer task appears, call add_todo immediately. If missing details, ask 1 question then update_todo. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
+        'Tasks: for each task, collect: (1) task description, (2) start time, (3) end time/deadline. Do NOT call add_todo until you have both start time and deadline (or one time + duration). Duration is auto-calculated - never ask for it. Timing can be relative or exact; do not require HH:MM format. When calling tools, convert times to HH:MM 24h or use offset_minutes fields.',
+        'Tools: if you have enough info, call add_todo (or update_todo for an existing task) BEFORE replying. Then reply with the tool response verbatim. Never claim you added/updated/deleted a task unless a tool call succeeded. If a time is missing, ask exactly 1 short question to get it. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
       ].join(' '),
       firstMessage: 'Top 3 computer tasks today — go.',
     };
@@ -184,11 +201,12 @@ function buildCoachPrompt(
         `You are noRot, a productivity coach with a ${style} style.`,
         'Be extremely concise: respond in 1 short sentence (max ~20 words). If you need info, ask exactly 1 short question.',
         'Never shame/blame (ADHD-aware).',
+        'The user\'s current tasks are: {{existing_todos}}. Refer to these if relevant; do not re-add tasks that already exist.',
         'Scope: computer tasks only. If they mention offline stuff, acknowledge briefly and pivot to a computer next step.',
-        'Tasks: get (task, rough duration, start time or deadline). Timing can be relative or exact; do not ask for HH:MM format.',
-        'Tools: when a concrete computer task appears, call add_todo immediately. If missing details, ask 1 question then update_todo. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
+        'Tasks: for each task, collect: (1) task description, (2) start time, (3) end time/deadline. Do NOT call add_todo until you have both start time and deadline (or one time + duration). Duration is auto-calculated - never ask for it. Timing can be relative or exact; do not require HH:MM format. When calling tools, convert times to HH:MM 24h or use offset_minutes fields.',
+        'Tools: if you have enough info, call add_todo (or update_todo for an existing task) BEFORE replying. Then reply with the tool response verbatim. Never claim you added/updated/deleted a task unless a tool call succeeded. If a time is missing, ask exactly 1 short question to get it. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
       ].join(' '),
-    firstMessage: 'What computer task are you doing next, and when is it due?',
+    firstMessage: 'What computer task are you doing next - when does it start and when is it due?',
   };
 }
 
@@ -409,7 +427,7 @@ async function createCheckinAgent(
       ? "No slurs, hate, or threats. Do not insult the user's identity - roast the behavior/loop."
       : 'Do not shame or guilt-trip. Adding guilt makes it worse.',
     'Goal: identify the intended task and give ONE smallest next step to start now.',
-    'Tools: add_todo for new tasks. Offer to toggle done when they finish. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
+    'Tools: add_todo for new tasks - you MUST have both start time and deadline (or enough info to calculate both) before calling add_todo; duration is auto-calculated. If you have enough info, call the tool BEFORE replying, then reply with the tool response verbatim. Never claim you added/updated/deleted a task unless a tool call succeeded. Convert times to HH:MM 24h or use offset_minutes fields. Offer to toggle done when they finish. Use list_todos if ambiguous. If silence/thinking, use skip_turn.',
   ].filter(Boolean).join(' ');
 
   const firstMessage = context.severity >= 4

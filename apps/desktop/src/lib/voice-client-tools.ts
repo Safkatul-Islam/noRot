@@ -1,6 +1,6 @@
 import type { TodoItem } from '@norot/shared';
 import type { TodoToolBackend } from '@/lib/todo-tool-backend';
-import { formatDurationMinutes, formatTimeOfDay, getTimeZoneLabel, normalizeTimeInput, resolveTimeZone } from '@/lib/time-utils';
+import { formatDurationMinutes, formatTimeOfDay, getTimeZoneLabel, hhmmToMinutes, minutesToHHMM, normalizeTimeInput, resolveOffsetToHHMM, resolveTimeZone } from '@/lib/time-utils';
 
 /**
  * Fuzzy-match a todo by text. Tries (in order):
@@ -39,6 +39,8 @@ export function createTodoClientTools(backend: TodoToolBackend) {
       duration_minutes?: number;
       start_time?: string;
       deadline?: string;
+      start_offset_minutes?: number;
+      deadline_offset_minutes?: number;
       app?: string;
       url?: string;
       allowed_apps?: string[];
@@ -51,12 +53,59 @@ export function createTodoClientTools(backend: TodoToolBackend) {
         const tz = resolveTimeZone(timeZone);
         const tf = timeFormat === '24h' ? '24h' : '12h';
 
-        const startTime = params.start_time ? normalizeTimeInput(params.start_time, tz) : undefined;
-        const deadline = params.deadline ? normalizeTimeInput(params.deadline, tz) : undefined;
-        const durationMinutes =
+        let startTime =
+          (params.start_time ? normalizeTimeInput(params.start_time, tz) : undefined) ??
+          resolveOffsetToHHMM(params.start_offset_minutes, tz, { allowZero: true });
+
+        let deadline =
+          (params.deadline ? normalizeTimeInput(params.deadline, tz) : undefined) ??
+          resolveOffsetToHHMM(params.deadline_offset_minutes, tz);
+
+        if (params.start_time && !normalizeTimeInput(params.start_time, tz) && startTime) {
+          console.warn(`[voice-tools] start_time string parse failed for "${params.start_time}", used offset fallback`);
+        }
+        if (params.deadline && !normalizeTimeInput(params.deadline, tz) && deadline) {
+          console.warn(`[voice-tools] deadline string parse failed for "${params.deadline}", used offset fallback`);
+        }
+
+        let durationMinutes =
           typeof params.duration_minutes === 'number' && Number.isFinite(params.duration_minutes) && params.duration_minutes > 0
             ? Math.trunc(params.duration_minutes)
             : undefined;
+
+        // Infer deadline from start + duration
+        if (!deadline && startTime && durationMinutes) {
+          const startMins = hhmmToMinutes(startTime);
+          if (startMins != null) deadline = minutesToHHMM(startMins + durationMinutes);
+        }
+
+        // Infer duration from start + deadline
+        if (!durationMinutes && startTime && deadline) {
+          const startMins = hhmmToMinutes(startTime);
+          const deadlineMins = hhmmToMinutes(deadline);
+          if (startMins != null && deadlineMins != null) {
+            const rawDiff = deadlineMins - startMins;
+            const diff = rawDiff >= 0 ? rawDiff : rawDiff + 24 * 60;
+            if (diff >= 5 && diff <= 24 * 60) durationMinutes = diff;
+          }
+        }
+
+        // Infer start from deadline + duration
+        if (!startTime && deadline && durationMinutes) {
+          const deadlineMins = hhmmToMinutes(deadline);
+          if (deadlineMins != null) startTime = minutesToHHMM(deadlineMins - durationMinutes);
+        }
+
+        // Validation (after inference)
+        if (!startTime && !deadline) {
+          return 'Missing start time and deadline. Ask the user when this task starts and its deadline.';
+        }
+        if (!startTime) {
+          return 'Missing start time. Ask the user when this task starts (so we have both start time and deadline).';
+        }
+        if (!deadline) {
+          return 'Missing deadline. Ask the user when this task ends (so we have both start time and deadline).';
+        }
 
         const existingTodos = await backend.getTodos();
         const maxOrder = existingTodos.reduce((max, t) => Math.max(max, t.order), -1);
@@ -140,6 +189,8 @@ export function createTodoClientTools(backend: TodoToolBackend) {
       app?: string;
       start_time?: string;
       duration_minutes?: number;
+      start_offset_minutes?: number;
+      deadline_offset_minutes?: number;
       url?: string;
       allowed_apps?: string[];
     }) => {
@@ -156,13 +207,23 @@ export function createTodoClientTools(backend: TodoToolBackend) {
           const next = params.new_text.trim();
           if (next) fields.text = next;
         }
-        if (params.deadline) {
-          const normalized = normalizeTimeInput(params.deadline, tz);
+        if (params.deadline || params.deadline_offset_minutes != null) {
+          const normalized =
+            (params.deadline ? normalizeTimeInput(params.deadline, tz) : undefined) ??
+            resolveOffsetToHHMM(params.deadline_offset_minutes, tz);
           if (normalized) fields.deadline = normalized;
+          if (params.deadline && !normalizeTimeInput(params.deadline, tz) && normalized) {
+            console.warn(`[voice-tools] deadline string parse failed for "${params.deadline}", used offset fallback`);
+          }
         }
-        if (params.start_time) {
-          const normalized = normalizeTimeInput(params.start_time, tz);
+        if (params.start_time || params.start_offset_minutes != null) {
+          const normalized =
+            (params.start_time ? normalizeTimeInput(params.start_time, tz) : undefined) ??
+            resolveOffsetToHHMM(params.start_offset_minutes, tz, { allowZero: true });
           if (normalized) fields.startTime = normalized;
+          if (params.start_time && !normalizeTimeInput(params.start_time, tz) && normalized) {
+            console.warn(`[voice-tools] start_time string parse failed for "${params.start_time}", used offset fallback`);
+          }
         }
         if (typeof params.duration_minutes === 'number' && Number.isFinite(params.duration_minutes) && params.duration_minutes > 0) {
           fields.durationMinutes = Math.trunc(params.duration_minutes);
