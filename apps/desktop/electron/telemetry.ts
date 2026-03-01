@@ -30,6 +30,10 @@ export interface TelemetryTick {
   appName: string;
   activeCategory: UsageSnapshot['categories']['activeCategory'];
   activeDomain?: string;
+  activityLabel?: string;
+  activitySource?: 'rules' | 'vision';
+  visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
+  visionMessage?: string;
   appSwitchesLast5Min: number;
   idleSeconds: number;
   snoozesLast60Min: number;
@@ -51,6 +55,11 @@ export function createTelemetryCollector(
   const activityClassifier = createActivityClassifier();
   let cachedActivity: ActivityClassification | null = null;
   let cachedActivityKey = '';
+  let visionInFlightKey = '';
+  let visionInFlight: Promise<void> | null = null;
+  let lastVisionAttemptAt = 0;
+  let lastVisionOutcome: 'none' | 'classified' | 'uncertain' | 'error' = 'none';
+  const VISION_RETRY_MS = 15_000;
 
   // Context-aware override (non-blocking Gemini check)
   let lastContextResult: ContextResult | null = null;
@@ -199,13 +208,54 @@ export function createTelemetryCollector(
     const visionEnabled = getVisionEnabled();
     const baseCategory = classifyApp(appName, rules, windowTitle, windowUrl);
     const activeDomain = isBrowser(appName) ? extractDomain(windowUrl, windowTitle) : undefined;
-    const activityKey = `${appName}|${activeDomain ?? ''}|${windowTitle ?? ''}`;
+    // Use a stable key so we don't restart CV inference constantly when window titles change.
+    const activityKey = `${appName}|${activeDomain ?? ''}`;
     if (activityKey !== cachedActivityKey) {
       cachedActivityKey = activityKey;
       cachedActivity = null;
+      visionInFlightKey = '';
+      visionInFlight = null;
+      lastVisionAttemptAt = 0;
+      lastVisionOutcome = 'none';
     }
 
     let category = cachedActivity?.category ?? baseCategory;
+
+    const visionEligible = visionEnabled && baseCategory === 'neutral';
+    if (
+      visionEligible &&
+      !visionInFlight &&
+      cachedActivity?.activitySource !== 'vision' &&
+      (lastVisionAttemptAt === 0 || now - lastVisionAttemptAt >= VISION_RETRY_MS)
+    ) {
+      lastVisionAttemptAt = now;
+      visionInFlightKey = activityKey;
+      visionInFlight = activityClassifier
+        .classify(
+          {
+            appName,
+            windowTitle,
+            windowUrl,
+            bounds: windowBounds,
+          },
+          rules,
+          visionEnabled
+        )
+        .then((res) => {
+          if (cachedActivityKey !== activityKey) return;
+          cachedActivity = res;
+          lastVisionOutcome = res.activitySource === 'vision' ? 'classified' : 'uncertain';
+        })
+        .catch(() => {
+          lastVisionOutcome = 'error';
+        })
+        .finally(() => {
+          if (visionInFlightKey === activityKey) {
+            visionInFlightKey = '';
+            visionInFlight = null;
+          }
+        });
+    }
 
     // Non-blocking context check: when distracting, check if relevant to a todo
     if (category === 'entertainment' || category === 'social') {
@@ -258,11 +308,40 @@ export function createTelemetryCollector(
     // Record time slice for rolling window
     timeSlices.push({ timestamp: now, durationMs: elapsed, category });
 
+    const visionStatus: TelemetryTick['visionStatus'] = !visionEnabled
+      ? 'disabled'
+      : baseCategory !== 'neutral'
+        ? 'idle'
+        : cachedActivity?.activitySource === 'vision'
+          ? 'classified'
+          : visionInFlightKey === activityKey
+            ? 'classifying'
+            : 'idle';
+
+    const visionMessage: TelemetryTick['visionMessage'] =
+      visionStatus === 'disabled'
+        ? 'AI vision is off.'
+        : baseCategory !== 'neutral'
+          ? 'No scanning needed.'
+          : visionStatus === 'classifying'
+            ? 'Scanning this app window to classify it…'
+            : cachedActivity?.activitySource === 'vision'
+              ? 'Scan complete.'
+              : lastVisionOutcome === 'uncertain'
+                ? 'Could not classify confidently yet — staying neutral.'
+                : lastVisionOutcome === 'error'
+                  ? 'Scan failed — will retry shortly.'
+                  : 'Idle.';
+
     onTick?.({
       elapsedMs: elapsed,
       appName,
       activeCategory: category as UsageSnapshot['categories']['activeCategory'],
       ...(activeDomain ? { activeDomain } : {}),
+      ...(cachedActivity?.activityLabel ? { activityLabel: cachedActivity.activityLabel } : {}),
+      ...(cachedActivity?.activitySource ? { activitySource: cachedActivity.activitySource } : {}),
+      visionStatus,
+      visionMessage,
       appSwitchesLast5Min: countSwitchesLast5Min(),
       idleSeconds,
       snoozesLast60Min: countSnoozesLast60Min(),
@@ -282,18 +361,18 @@ export function createTelemetryCollector(
       const recentDistractRatio = computeRecentDistractRatio();
       const snoozesLast60Min = countSnoozesLast60Min();
 
-      // Refresh activity classification.
-      // Note: this includes fast rule-based detection even when `visionEnabled` is false.
-      cachedActivity = await activityClassifier.classify(
-        {
-          appName,
-          windowTitle,
-          windowUrl,
-          bounds: windowBounds,
-        },
-        rules,
-        visionEnabled
-      );
+      // Refresh activity classification if we don't already have a cached result for this activity.
+      // Note: CV is only used for neutral apps (see activity-classifier.ts).
+      cachedActivity = cachedActivity ?? await activityClassifier.classify(
+          {
+            appName,
+            windowTitle,
+            windowUrl,
+            bounds: windowBounds,
+          },
+          rules,
+          visionEnabled
+        );
 
       const contextOverride = lastContextResult?.isRelevant === true;
       const contextTodo = contextOverride ? (lastContextResult?.matchedTodoText ?? undefined) : undefined;

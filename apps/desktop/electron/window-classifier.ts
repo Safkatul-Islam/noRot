@@ -3,6 +3,8 @@ import { KNOWN_BROWSERS } from './types';
 
 // Well-known site names that appear in browser window titles
 const TITLE_DOMAIN_MAP: Record<string, string> = {
+  discord: 'discord.com',
+  chatgpt: 'chatgpt.com',
   youtube: 'youtube.com',
   reddit: 'reddit.com',
   twitter: 'twitter.com',
@@ -20,6 +22,7 @@ const TITLE_DOMAIN_MAP: Record<string, string> = {
   'google slides': 'docs.google.com',
   'google drive': 'drive.google.com',
   gmail: 'mail.google.com',
+  'google calendar': 'calendar.google.com',
 };
 
 export function isBrowser(appName: string): boolean {

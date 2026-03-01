@@ -22,6 +22,7 @@ import { useVoice } from '@/hooks/useVoice';
 import { useSnoozeSync } from '@/hooks/useSnoozeSync';
 import { useSettings } from '@/hooks/useSettings';
 import { useStartupFlow } from '@/hooks/useStartupFlow';
+import { useActivityStatus } from '@/hooks/useActivityStatus';
 import { useAppStore } from '@/stores/app-store';
 import { useVoiceChatStore } from '@/stores/voice-chat-store';
 import { getNorotAPI } from '@/lib/norot-api';
@@ -41,6 +42,7 @@ function AppContent() {
   useScore();
   useVoice();
   useSnoozeSync();
+  useActivityStatus();
   const { interventions, activeIntervention, respondToIntervention } = useInterventions();
   const activePage = useAppStore((s) => s.activePage);
   const setTelemetryActive = useAppStore((s) => s.setTelemetryActive);

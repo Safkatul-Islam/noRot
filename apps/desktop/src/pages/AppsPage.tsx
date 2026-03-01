@@ -15,15 +15,31 @@ import { getNorotAPI } from '@/lib/norot-api';
 import type { AppStats, CategoryRule } from '@/lib/electron-api';
 import { cn } from '@/lib/utils';
 import { ChevronDown, Loader2, Plus } from 'lucide-react';
+import { useAppStore } from '@/stores/app-store';
 
-const CATEGORY_COLORS: Record<string, string> = {
+type UiCategory = 'productive' | 'neutral' | 'unproductive';
+
+function toUiCategory(category: string | undefined): UiCategory {
+  if (category === 'productive' || category === 'neutral') return category;
+  return 'unproductive';
+}
+
+function toRuleCategory(
+  uiCategory: UiCategory,
+  existingRuleCategory?: CategoryRule['category'],
+): CategoryRule['category'] {
+  if (uiCategory === 'productive' || uiCategory === 'neutral') return uiCategory;
+  // Preserve the original "flavor" when possible; otherwise default to 'social'.
+  return existingRuleCategory === 'entertainment' ? 'entertainment' : 'social';
+}
+
+const CATEGORY_COLORS: Record<UiCategory, string> = {
   productive: '#22c55e',
   neutral: '#6b7280',
-  social: '#3b82f6',
-  entertainment: '#f97316',
+  unproductive: '#f97316',
 };
 
-const CATEGORIES = ['productive', 'neutral', 'social', 'entertainment'] as const;
+const CATEGORIES: UiCategory[] = ['productive', 'neutral', 'unproductive'];
 
 const TIME_RANGES = [
   { label: 'Last 24h', minutes: 1440 },
@@ -47,7 +63,8 @@ export function AppsPage() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [addWebsiteOpen, setAddWebsiteOpen] = useState(false);
   const [newUrl, setNewUrl] = useState('');
-  const [newUrlCategory, setNewUrlCategory] = useState<string>('neutral');
+  const [newUrlCategory, setNewUrlCategory] = useState<UiCategory>('neutral');
+  const activityStatus = useAppStore((s) => s.activityStatus);
 
   const statKey = (stat: AppStats): string =>
     `${stat.appName}||${stat.domain ?? ''}`;
@@ -59,56 +76,54 @@ export function AppsPage() {
     Promise.all([
       api.getAppStats(timeRange),
       api.getSettings(),
-      api.getInstalledApps(),
-    ]).then(([stats, settings, installedApps]) => {
+    ]).then(([stats, settings]) => {
       if (cancelled) return;
-
-      // Merge installed apps: add synthetic entries for apps not already tracked
-      const trackedNames = new Set(stats.map((s) => s.appName.toLowerCase()));
-      for (const name of installedApps) {
-        if (!trackedNames.has(name.toLowerCase())) {
-          stats.push({
-            appName: name,
-            category: 'neutral',
-            totalSeconds: 0,
-            lastSeen: '',
-          });
-        }
-      }
-
-      setAppStats(stats);
+      setAppStats(stats.filter((s) => (s.totalSeconds ?? 0) > 0));
       setRules(settings.categoryRules ?? []);
       setLoading(false);
     }).catch(() => {
       if (!cancelled) setLoading(false);
     });
-    return () => { cancelled = true; };
+    const refreshInterval = setInterval(() => {
+      api.getAppStats(timeRange).then((stats) => {
+        if (cancelled) return;
+        setAppStats(stats.filter((s) => (s.totalSeconds ?? 0) > 0));
+      }).catch(() => {
+        // ignore
+      });
+    }, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(refreshInterval);
+    };
   }, [timeRange]);
 
-  const getCategoryForApp = (stat: AppStats): string => {
+  const getCategoryForApp = (stat: AppStats): UiCategory => {
     if (stat.domain) {
       const exact = rules.find((r) => r.matchType === 'title' && r.pattern === stat.domain);
-      if (exact) return exact.category;
+      if (exact) return toUiCategory(exact.category);
       const match = rules.find((r) => r.matchType === 'title' && stat.domain!.includes(r.pattern));
-      if (match) return match.category;
+      if (match) return toUiCategory(match.category);
     }
 
     const exact = rules.find((r) => r.matchType === 'app' && r.pattern === stat.appName);
-    if (exact) return exact.category;
+    if (exact) return toUiCategory(exact.category);
     const match = rules.find((r) => r.matchType === 'app' && stat.appName.includes(r.pattern));
-    return match ? match.category : stat.category;
+    return match ? toUiCategory(match.category) : toUiCategory(stat.category);
   };
 
-  const handleCategoryChange = (stat: AppStats, newCategory: string) => {
+  const handleCategoryChange = (stat: AppStats, newCategory: UiCategory) => {
     const matchType: CategoryRule['matchType'] = stat.domain ? 'title' : 'app';
     const pattern = stat.domain ?? stat.appName;
 
     const existingIndex = rules.findIndex((r) => r.matchType === matchType && r.pattern === pattern);
+    const existingRuleCategory = existingIndex >= 0 ? rules[existingIndex]?.category : undefined;
+    const nextRuleCategory = toRuleCategory(newCategory, existingRuleCategory);
     let updatedRules: CategoryRule[];
     if (existingIndex >= 0) {
       updatedRules = rules.map((r, i) =>
         i === existingIndex
-          ? { ...r, category: newCategory as CategoryRule['category'] }
+          ? { ...r, category: nextRuleCategory }
           : r
       );
     } else {
@@ -118,7 +133,7 @@ export function AppsPage() {
           id: crypto.randomUUID(),
           matchType,
           pattern,
-          category: newCategory as CategoryRule['category'],
+          category: nextRuleCategory,
         },
       ];
     }
@@ -168,22 +183,10 @@ export function AppsPage() {
       id: crypto.randomUUID(),
       matchType: 'title',
       pattern: url,
-      category: newUrlCategory as CategoryRule['category'],
+      category: toRuleCategory(newUrlCategory),
     };
     const updatedRules = [...rules, rule];
     setRules(updatedRules);
-
-    // Add a synthetic app entry so it shows up immediately as a ghost card
-    setAppStats((prev) => [
-      ...prev,
-      {
-        appName: url,
-        domain: url,
-        category: newUrlCategory,
-        totalSeconds: 0,
-        lastSeen: new Date().toISOString(),
-      },
-    ]);
 
     const api = getNorotAPI();
     api.updateSettings({ categoryRules: updatedRules }).catch(() => {});
@@ -192,6 +195,11 @@ export function AppsPage() {
     setNewUrlCategory('neutral');
     setAddWebsiteOpen(false);
   };
+
+  const activeUiCategory =
+    activityStatus?.activeCategory === 'social' || activityStatus?.activeCategory === 'entertainment'
+      ? 'unproductive'
+      : activityStatus?.activeCategory ?? 'unknown';
 
   return (
     <div className="flex flex-col gap-5">
@@ -223,6 +231,36 @@ export function AppsPage() {
           <Plus className="size-3.5 mr-1.5" />
           Add Website
         </Button>
+      </div>
+
+      {/* Live CV / activity status */}
+      <div className="rounded-lg border border-white/[0.06] bg-[var(--color-glass-well)] backdrop-blur-[16px] p-3">
+        <div className="flex items-start gap-2">
+          {activityStatus?.visionStatus === 'classifying' ? (
+            <Loader2 className="size-4 text-primary animate-spin mt-0.5" />
+          ) : (
+            <div className="size-4 mt-0.5" />
+          )}
+          <div className="min-w-0">
+            <p className="text-xs text-text-muted uppercase tracking-wider">AI Vision</p>
+            <p className="text-sm text-text-primary truncate">
+              {activityStatus
+                ? `${activityStatus.appName}${activityStatus.activeDomain ? ` (${activityStatus.activeDomain})` : ''}`
+                : 'Waiting for telemetry…'}
+            </p>
+            <p className="text-xs text-text-secondary mt-1">
+              {!activityStatus
+                ? 'AI vision is idle.'
+                : activityStatus.visionStatus === 'disabled'
+                  ? 'AI vision is off.'
+                  : activityStatus.visionStatus === 'classifying'
+                    ? (activityStatus.visionMessage ?? 'Scanning this app window to classify it…')
+                    : activityStatus.activitySource === 'vision'
+                      ? `Classified as ${activeUiCategory}.`
+                      : (activityStatus.visionMessage ?? 'No scanning needed right now.')}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Loading spinner */}
@@ -311,20 +349,19 @@ export function AppsPage() {
                                     boxShadow: `0 0 4px ${CATEGORY_COLORS[getCategoryForApp(stat)] ?? '#6b7280'}50`,
                                   }}
                                 />
-                                <select
-                                  value={getCategoryForApp(stat)}
-                                  onChange={(e) => handleCategoryChange(stat, e.target.value)}
-                                  className="bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-1.5 py-1 text-xs text-text-primary focus:outline-none focus:border-primary/40"
-                                >
-                                  <option value="productive">Productive</option>
-                                  <option value="neutral">Neutral</option>
-                                  <option value="social">Social</option>
-                                  <option value="entertainment">Entertainment</option>
-                                </select>
-                              </div>
-                            </div>
-                          );
-                        })
+                <select
+                  value={getCategoryForApp(stat)}
+                  onChange={(e) => handleCategoryChange(stat, e.target.value as UiCategory)}
+                  className="bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-1.5 py-1 text-xs text-text-primary focus:outline-none focus:border-primary/40"
+                >
+                  <option value="productive">Productive</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="unproductive">Unproductive</option>
+                </select>
+              </div>
+            </div>
+          );
+        })
                       )}
                     </div>
                   )}
@@ -368,13 +405,12 @@ export function AppsPage() {
                 />
                 <select
                   value={newUrlCategory}
-                  onChange={(e) => setNewUrlCategory(e.target.value)}
+                  onChange={(e) => setNewUrlCategory(e.target.value as UiCategory)}
                   className="flex-1 bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-primary/40"
                 >
                   <option value="productive">Productive</option>
                   <option value="neutral">Neutral</option>
-                  <option value="social">Social</option>
-                  <option value="entertainment">Entertainment</option>
+                  <option value="unproductive">Unproductive</option>
                 </select>
               </div>
             </div>

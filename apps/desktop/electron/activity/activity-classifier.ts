@@ -48,14 +48,14 @@ const CANDIDATE_LABELS: Array<{ label: string; kind: ActivityKind; category: Act
   { label: 'editing a presentation slide', kind: 'presentations', category: 'productive' },
   { label: 'writing a document', kind: 'writing', category: 'productive' },
   { label: 'reading technical documentation', kind: 'docs', category: 'productive' },
-  { label: 'checking email', kind: 'email', category: 'neutral' },
+  { label: 'checking email', kind: 'email', category: 'productive' },
   { label: 'chatting in a messaging app', kind: 'chat', category: 'social' },
   { label: 'scrolling social media', kind: 'social_feed', category: 'social' },
   { label: 'watching an online video', kind: 'video', category: 'entertainment' },
   { label: 'shopping online', kind: 'shopping', category: 'entertainment' },
   { label: 'playing a video game', kind: 'games', category: 'entertainment' },
-  { label: 'using system settings', kind: 'settings', category: 'neutral' },
-  { label: 'browsing files in a file manager', kind: 'file_manager', category: 'neutral' },
+  { label: 'using system settings', kind: 'settings', category: 'productive' },
+  { label: 'browsing files in a file manager', kind: 'file_manager', category: 'productive' },
 ];
 
 function brandFromDomain(domain: string): string | null {
@@ -119,10 +119,10 @@ function rulesBasedActivity(ctx: ActiveWindowContext): ActivityClassification | 
     return { category: 'productive', activityLabel: 'writing', activityKind: 'writing', activityConfidence: 0.9, activitySource: 'rules' };
   }
   if (appName.includes('finder') || appName.includes('file explorer')) {
-    return { category: 'neutral', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' };
+    return { category: 'productive', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' };
   }
   if (appName.includes('system settings') || appName === 'settings') {
-    return { category: 'neutral', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' };
+    return { category: 'productive', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' };
   }
 
   return null;
@@ -131,6 +131,34 @@ function rulesBasedActivity(ctx: ActiveWindowContext): ActivityClassification | 
 async function captureActiveWindowPng(ctx: ActiveWindowContext): Promise<Buffer | null> {
   try {
     if (!ctx.bounds || ctx.bounds.width <= 1 || ctx.bounds.height <= 1) return null;
+
+    // Prefer window-only thumbnails when available so we capture *only* the app window.
+    // Fall back to screen thumbnail + crop if window sources aren't available.
+    try {
+      const windowSources = await desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: { width: 900, height: 600 },
+        fetchWindowIcons: false,
+      });
+
+      const title = (ctx.windowTitle ?? '').trim().toLowerCase();
+      const appName = (ctx.appName ?? '').trim().toLowerCase();
+      const match =
+        windowSources.find((s) => title && s.name?.toLowerCase?.() === title) ??
+        windowSources.find((s) => title && s.name?.toLowerCase?.().includes(title)) ??
+        windowSources.find((s) => appName && s.name?.toLowerCase?.().includes(appName));
+
+      if (match?.thumbnail) {
+        const sz = match.thumbnail.getSize();
+        if (sz.width > 1 && sz.height > 1) {
+          const resized = match.thumbnail.resize({ width: 384, height: 384, quality: 'good' });
+          const buf = resized.toPNG();
+          if (buf && buf.length > 0) return buf;
+        }
+      }
+    } catch {
+      // ignore
+    }
 
     const displays = screen.getAllDisplays();
     const centerX = ctx.bounds.x + ctx.bounds.width / 2;
@@ -249,15 +277,17 @@ export function createActivityClassifier() {
 
       if (!visionEnabled) return base;
 
+      // Only use CV when the app/domain is genuinely ambiguous (neutral in rules).
+      // This matches the UX spec: 50/50 apps start neutral, and vision decides per screenshot.
+      if (baseCategory !== 'neutral') return base;
+
       if (process.platform === 'darwin') {
         const status = systemPreferences.getMediaAccessStatus('screen');
         if (status !== 'granted') return base;
       }
 
-      // Avoid expensive inference for known productive native apps
-      if (!isBrowser(ctx.appName) && baseCategory === 'productive') return base;
-
-      const key = `${ctx.appName}|${baseDomain ?? ''}|${ctx.windowTitle ?? ''}`;
+      // Stable key so we don't restart inference constantly when window titles change.
+      const key = `${ctx.appName}|${baseDomain ?? ''}`;
       const now = Date.now();
       if (key === lastKey && lastResult && now - lastAt < VISION_THROTTLE_MS) {
         return lastResult;

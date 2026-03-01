@@ -46,6 +46,16 @@ contextBridge.exposeInMainWorld('norot', {
     };
   },
 
+  onActivityStatus: (callback: (data: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) => {
+      callback(data);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_ACTIVITY_STATUS, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_ACTIVITY_STATUS, handler);
+    };
+  },
+
   // --- Interventions ---
   respondToIntervention: (
     eventId: string,

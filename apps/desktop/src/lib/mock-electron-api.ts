@@ -61,6 +61,7 @@ export const mockNorotAPI: NoRotAPI = {
   getLatestScore: async () => null,
   onScoreUpdate: () => () => {},
   onLiveScoreUpdate: () => () => {},
+  onActivityStatus: () => () => {},
   respondToIntervention: async () => {},
   getActiveIntervention: async () => null,
   onIntervention: () => () => {},

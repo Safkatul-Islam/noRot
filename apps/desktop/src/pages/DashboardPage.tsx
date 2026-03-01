@@ -26,6 +26,7 @@ interface DashboardPageProps {
 export function DashboardPage({ interventions, activeIntervention, onRespond }: DashboardPageProps) {
   const { currentSeverity, reasons, recommendation } = useScoreStore();
   const setActivePage = useAppStore((s) => s.setActivePage);
+  const activityStatus = useAppStore((s) => s.activityStatus);
   const [permissions, setPermissions] = useState<{
     screenRecording: boolean;
     status?: 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
@@ -80,6 +81,26 @@ export function DashboardPage({ interventions, activeIntervention, onRespond }: 
         ? 'Your focus is strong. Keep it up.'
         : 'No message for this score.';
 
+  const uiCategory =
+    activityStatus?.activeCategory === 'social' || activityStatus?.activeCategory === 'entertainment'
+      ? 'unproductive'
+      : activityStatus?.activeCategory ?? 'unknown';
+
+  const visionLine = (() => {
+    if (!activityStatus) return 'AI vision: waiting for telemetry…';
+    if (activityStatus.visionStatus === 'disabled') return 'AI vision: off';
+    if (activityStatus.visionStatus === 'classifying') {
+      const domain = activityStatus.activeDomain ? ` (${activityStatus.activeDomain})` : '';
+      return activityStatus.visionMessage
+        ? `AI vision: ${activityStatus.visionMessage}`
+        : `AI vision: analyzing ${activityStatus.appName}${domain}…`;
+    }
+    if (activityStatus.activitySource === 'vision') {
+      return `AI vision: classified as ${uiCategory}`;
+    }
+    return 'AI vision: idle';
+  })();
+
   return (
     <div className="flex flex-col gap-5 flex-1">
       {/* Row 1: Score Hero + Sim/History column */}
@@ -130,6 +151,13 @@ export function DashboardPage({ interventions, activeIntervention, onRespond }: 
                     <p className="text-xs text-text-muted mb-1 uppercase tracking-wider">Current Message</p>
                     <p className="text-sm text-text-primary leading-relaxed">
                       {currentMessage}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-white/[0.06] bg-[var(--color-glass-well)] backdrop-blur-[16px] p-3">
+                    <p className="text-xs text-text-muted mb-1 uppercase tracking-wider">AI Classification</p>
+                    <p className="text-xs text-text-secondary leading-relaxed">
+                      {visionLine}
                     </p>
                   </div>
 

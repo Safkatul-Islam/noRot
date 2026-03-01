@@ -8,10 +8,29 @@ interface AppState {
   telemetryActive: boolean;
   connectionStatus: ConnectionStatus;
   appFocused: boolean;
+  activityStatus: null | {
+    appName: string;
+    activeDomain?: string;
+    activeCategory: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
+    activityLabel?: string;
+    activitySource?: 'rules' | 'vision';
+    visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
+    visionMessage?: string;
+    updatedAt: number;
+  };
   setActivePage: (page: Page) => void;
   setTelemetryActive: (active: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setAppFocused: (focused: boolean) => void;
+  setActivityStatus: (data: {
+    appName: string;
+    activeDomain?: string;
+    activeCategory: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
+    activityLabel?: string;
+    activitySource?: 'rules' | 'vision';
+    visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
+    visionMessage?: string;
+  }) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -19,8 +38,10 @@ export const useAppStore = create<AppState>((set) => ({
   telemetryActive: false,
   connectionStatus: 'disconnected',
   appFocused: true,
+  activityStatus: null,
   setActivePage: (page) => set({ activePage: page }),
   setTelemetryActive: (active) => set({ telemetryActive: active }),
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   setAppFocused: (focused) => set({ appFocused: focused }),
+  setActivityStatus: (data) => set({ activityStatus: { ...data, updatedAt: Date.now() } }),
 }));

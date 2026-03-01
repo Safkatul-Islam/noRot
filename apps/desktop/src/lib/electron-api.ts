@@ -57,6 +57,15 @@ export interface NoRotAPI {
   getLatestScore(): Promise<ScoreResponse | null>;
   onScoreUpdate(callback: (score: ScoreResponse) => void): () => void;
   onLiveScoreUpdate(callback: (score: { procrastinationScore: number; severity: Severity }) => void): () => void;
+  onActivityStatus(callback: (data: {
+    appName: string;
+    activeDomain?: string;
+    activeCategory: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
+    activityLabel?: string;
+    activitySource?: 'rules' | 'vision';
+    visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
+    visionMessage?: string;
+  }) => void): () => void;
   respondToIntervention(
     eventId: string,
     response: 'snoozed' | 'dismissed' | 'working'

@@ -1,9 +1,12 @@
+import categorySeedsRaw from './activity/app-category-seeds.json';
+
 // IPC channel constants
 export const IPC_CHANNELS = {
   RELAUNCH_APP: 'app:relaunch',
   START_TELEMETRY: 'telemetry:start',
   STOP_TELEMETRY: 'telemetry:stop',
   IS_TELEMETRY_ACTIVE: 'telemetry:active',
+  ON_ACTIVITY_STATUS: 'activity:status',
   GET_LATEST_SCORE: 'score:latest',
   ON_SCORE_UPDATE: 'score:update',
   ON_LIVE_SCORE_UPDATE: 'score:live',
@@ -81,6 +84,26 @@ export interface CategoryRule {
   category: 'productive' | 'neutral' | 'social' | 'entertainment';
 }
 
+type SeedCategory = 'productive' | 'neutral' | 'unproductive';
+type SeedUnproductiveKind = 'social' | 'entertainment';
+type SeedRule = { pattern: string; category: SeedCategory; unproductiveKind?: SeedUnproductiveKind };
+type SeedFile = { apps: SeedRule[]; domains: SeedRule[] };
+
+function slugify(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function seedToInternalCategory(seed: SeedRule): CategoryRule['category'] {
+  if (seed.category === 'productive') return 'productive';
+  if (seed.category === 'neutral') return 'neutral';
+  return seed.unproductiveKind === 'social' ? 'social' : 'entertainment';
+}
+
 export interface UserSettings {
   persona: 'calm_friend' | 'coach' | 'tough_love';
   /** If false, `tough_love` persona cannot be selected (explicit language). */
@@ -135,35 +158,21 @@ export const KNOWN_BROWSERS = [
   'chromium.exe',
 ];
 
+const categorySeeds = categorySeedsRaw as unknown as SeedFile;
+
 export const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
-  { id: 'prod-code', matchType: 'app', pattern: 'Code', category: 'productive' },
-  { id: 'prod-terminal', matchType: 'app', pattern: 'Terminal', category: 'productive' },
-  { id: 'prod-iterm', matchType: 'app', pattern: 'iTerm', category: 'productive' },
-  { id: 'prod-xcode', matchType: 'app', pattern: 'Xcode', category: 'productive' },
-  { id: 'prod-notion', matchType: 'app', pattern: 'Notion', category: 'productive' },
-  { id: 'ent-twitter', matchType: 'app', pattern: 'Twitter', category: 'entertainment' },
-  { id: 'ent-reddit', matchType: 'app', pattern: 'Reddit', category: 'entertainment' },
-  { id: 'ent-tiktok', matchType: 'app', pattern: 'TikTok', category: 'entertainment' },
-  { id: 'ent-youtube', matchType: 'app', pattern: 'YouTube', category: 'entertainment' },
-  { id: 'ent-instagram', matchType: 'app', pattern: 'Instagram', category: 'entertainment' },
-  { id: 'soc-slack', matchType: 'app', pattern: 'Slack', category: 'social' },
-  { id: 'soc-discord', matchType: 'app', pattern: 'Discord', category: 'social' },
-  { id: 'soc-messages', matchType: 'app', pattern: 'Messages', category: 'social' },
-  // Domain-based rules (match browser window titles/URLs)
-  { id: 'title-youtube', matchType: 'title', pattern: 'youtube.com', category: 'entertainment' },
-  { id: 'title-reddit', matchType: 'title', pattern: 'reddit.com', category: 'entertainment' },
-  { id: 'title-twitter', matchType: 'title', pattern: 'twitter.com', category: 'entertainment' },
-  { id: 'title-x', matchType: 'title', pattern: 'x.com', category: 'entertainment' },
-  { id: 'title-tiktok', matchType: 'title', pattern: 'tiktok.com', category: 'entertainment' },
-  { id: 'title-instagram', matchType: 'title', pattern: 'instagram.com', category: 'entertainment' },
-  { id: 'title-twitch', matchType: 'title', pattern: 'twitch.tv', category: 'entertainment' },
-  { id: 'title-netflix', matchType: 'title', pattern: 'netflix.com', category: 'entertainment' },
-  { id: 'title-facebook', matchType: 'title', pattern: 'facebook.com', category: 'entertainment' },
-  { id: 'title-messenger', matchType: 'title', pattern: 'messenger.com', category: 'social' },
-  { id: 'title-linkedin', matchType: 'title', pattern: 'linkedin.com', category: 'social' },
-  { id: 'title-github', matchType: 'title', pattern: 'github.com', category: 'productive' },
-  { id: 'title-stackoverflow', matchType: 'title', pattern: 'stackoverflow.com', category: 'productive' },
-  { id: 'title-googledocs', matchType: 'title', pattern: 'docs.google.com', category: 'productive' },
+  ...categorySeeds.apps.map((seed) => ({
+    id: `seed-app-${slugify(seed.pattern)}`,
+    matchType: 'app' as const,
+    pattern: seed.pattern,
+    category: seedToInternalCategory(seed),
+  })),
+  ...categorySeeds.domains.map((seed) => ({
+    id: `seed-domain-${slugify(seed.pattern)}`,
+    matchType: 'title' as const,
+    pattern: seed.pattern,
+    category: seedToInternalCategory(seed),
+  })),
 ];
 
 export const DEFAULT_SETTINGS: UserSettings = {

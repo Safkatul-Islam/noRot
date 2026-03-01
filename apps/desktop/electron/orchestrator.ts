@@ -352,6 +352,16 @@ function processTick(tick: TelemetryTick): void {
     const baseSeverity = scoreToSeverity(procScore);
     const severity = applySnoozeEscalation(baseSeverity, tick.snoozesLast60Min);
 
+    sendToRenderer(IPC_CHANNELS.ON_ACTIVITY_STATUS, {
+      appName: tick.appName,
+      activeDomain: tick.activeDomain,
+      activeCategory: tick.activeCategory,
+      activityLabel: tick.activityLabel,
+      activitySource: tick.activitySource,
+      visionStatus: tick.visionStatus,
+      visionMessage: tick.visionMessage,
+    });
+
     sendToRenderer(IPC_CHANNELS.ON_LIVE_SCORE_UPDATE, {
       procrastinationScore: procScore,
       severity,
