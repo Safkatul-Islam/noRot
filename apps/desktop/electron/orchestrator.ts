@@ -9,6 +9,8 @@ import type {
 } from '@norot/shared';
 import {
   calculateScore,
+  applySnoozeEscalation,
+  generateReasons,
   SEVERITY_BANDS,
   SNOOZE_PRESSURE_POINTS,
   SNOOZE_PRESSURE_DURATION_MIN,
@@ -143,7 +145,8 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
 
     if (!scoreResult) {
       // Local fallback
-      const { score, severity } = calculateScore(snapshot, snoozePressure);
+      const { score, severity: baseSeverity } = calculateScore(snapshot, snoozePressure);
+      const severity = applySnoozeEscalation(baseSeverity, snapshot.signals.snoozesLast60Min);
       const persona = settings.persona;
       const band = SEVERITY_BANDS.find((b) => b.severity === severity);
 
@@ -346,40 +349,6 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
   } catch (err) {
     console.error('[orchestrator] Error processing snapshot:', err);
   }
-}
-
-function generateReasons(snapshot: UsageSnapshot, score: number): string[] {
-  const reasons: string[] = [];
-  const { signals, categories } = snapshot;
-
-  if (signals.distractingMinutes > signals.productiveMinutes) {
-    reasons.push('Spending more time on distracting apps than productive work');
-  }
-  if (signals.appSwitchesLast5Min > 8) {
-    reasons.push('Switching between apps very frequently');
-  }
-  if (
-    categories.activeCategory === 'entertainment' ||
-    categories.activeCategory === 'social'
-  ) {
-    const domainInfo = categories.activeDomain
-      ? ` on ${categories.activeDomain}`
-      : '';
-    reasons.push(`Using ${categories.activeApp}${domainInfo} (${categories.activeCategory})`);
-  }
-  if (signals.snoozesLast60Min > 0) {
-    reasons.push(
-      `Dismissed reminders ${signals.snoozesLast60Min} times recently`
-    );
-  }
-  if (reasons.length === 0 && score > 0) {
-    reasons.push('Mild distraction detected');
-  }
-  if (reasons.length === 0) {
-    reasons.push('You\'re focused — keep it up!');
-  }
-
-  return reasons;
 }
 
 // --- Public API ---

@@ -1,136 +1,140 @@
-import { LATE_NIGHT_MULTIPLIER, SCORING_WEIGHTS, SEVERITY_BANDS } from './constants'
-import type { ActiveCategory, Severity, UsageSnapshot } from './types'
-
-export interface CalculatedScore {
-  procrastinationScore: number
-  severity: Severity
-}
+import type { UsageSnapshot, Severity } from './types';
+import { SCORING_WEIGHTS, LATE_NIGHT_MULTIPLIER, SEVERITY_BANDS } from './constants';
 
 function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min
-  return Math.max(min, Math.min(max, value))
-}
-
-function isDistractingCategory(category: ActiveCategory): boolean {
-  return category === 'social' || category === 'entertainment'
+  return Math.max(min, Math.min(max, value));
 }
 
 function normalizeSwitchRate(switchesPerMin: number): number {
-  const s = Math.max(0, switchesPerMin)
-  if (s <= 4) return s / 10
-  if (s <= 10) return 0.4 + (s - 4) * (0.4 / 6)
-  return 0.8 + Math.min(s - 10, 5) * (0.2 / 5)
+  // 0-4 = low (0-0.4), 5-10 = medium (0.4-0.8), 11+ = high (0.8-1.0)
+  if (switchesPerMin <= 4) return switchesPerMin / 10;
+  if (switchesPerMin <= 10) return 0.4 + (switchesPerMin - 4) * (0.4 / 6);
+  return 0.8 + Math.min(switchesPerMin - 10, 5) * (0.2 / 5);
 }
 
-export function scoreToSeverity(score: number): Severity {
-  const s = clamp(Math.round(score), 0, 100)
-  const band = SEVERITY_BANDS.find(b => s >= b.min && s <= b.max)
-  return (band?.severity ?? 4) as Severity
+function isLateNight(timeStr: string): boolean {
+  const hour = parseInt(timeStr.split(':')[0], 10);
+  return hour >= 23 || hour < 5;
 }
 
-function isLateNightHour(hour: number): boolean {
-  return hour >= 23 || hour < 5
-}
+export function calculateScore(snapshot: UsageSnapshot, snoozePressure: number = 0): { score: number; severity: Severity } {
+  const { signals, categories, focusIntent } = snapshot;
 
-function getLocalHour(snapshot: UsageSnapshot): number {
-  const fromSignal = snapshot.signals.timeOfDayLocal
-  if (Number.isFinite(fromSignal)) return clamp(Math.floor(fromSignal), 0, 23)
-  return new Date(snapshot.timestamp).getHours()
-}
+  const distractRatio = signals.recentDistractRatio != null
+    ? signals.recentDistractRatio
+    : (signals.sessionMinutes > 0
+      ? signals.distractingMinutes / signals.sessionMinutes
+      : 0);
 
-export function calculateScore(snapshot: UsageSnapshot, snoozePressure: number = 0): CalculatedScore {
-  const focusScore = snapshot.signals.focusScore
-  if (typeof focusScore === 'number' && Number.isFinite(focusScore)) {
-    const procrastinationScore = clamp(Math.round((100 - focusScore) + snoozePressure), 0, 100)
-    return { procrastinationScore, severity: scoreToSeverity(procrastinationScore) }
-  }
+  // Make the score respond quickly when the user is *currently* in a distracting category.
+  // Relying only on a rolling ratio can lag by minutes (especially in long sessions).
+  const isDistractingNow = categories.activeCategory === 'social' || categories.activeCategory === 'entertainment';
+  // Floor to a high ratio so the UI drops fast as soon as you enter distracting apps.
+  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio;
 
-  const isDistractingNow = isDistractingCategory(snapshot.categories.activeCategory)
+  // `appSwitchesLast5Min` is a raw count in the last 5 minutes, but the scoring model
+  // expects a per-minute rate.
+  // See docs/error-patterns/focus-drops-while-productive.md
+  const switchesPerMin = signals.appSwitchesLast5Min / 5;
+  const normSwitchRate = normalizeSwitchRate(switchesPerMin);
+  const switchPenaltyEligible = isDistractingNow || clamp(effectiveDistractRatio, 0, 1) >= 0.2;
+  const normSwitchRateEffective = switchPenaltyEligible ? normSwitchRate : 0;
 
-  const distractRatioRaw = typeof snapshot.signals.recentDistractRatio === 'number'
-    ? snapshot.signals.recentDistractRatio
-    : (snapshot.signals.sessionMinutes > 0
-        ? snapshot.signals.distractingMinutes / snapshot.signals.sessionMinutes
-        : 0)
+  const intentGap = (focusIntent !== null &&
+    (categories.activeCategory === 'social' || categories.activeCategory === 'entertainment'))
+    ? 1 : 0;
 
-  const distractRatio = clamp(distractRatioRaw, 0, 1)
-  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio
-
-  const switchesPerMin = snapshot.signals.appSwitchesLast5Min / 5
-  const normSwitchRate = clamp(normalizeSwitchRate(switchesPerMin), 0, 1)
-  const normSwitchRateEffective = (isDistractingNow || effectiveDistractRatio >= 0.2) ? normSwitchRate : 0
-
-  const intentGap = snapshot.focusIntent !== null && isDistractingNow ? 1 : 0
-  const snoozePressureNorm = clamp(snapshot.signals.snoozesLast60Min, 0, 3) / 3
+  const snoozePressureNorm = clamp(signals.snoozesLast60Min, 0, 3) / 3;
 
   const base = 100 * (
     SCORING_WEIGHTS.distractRatio * effectiveDistractRatio +
     SCORING_WEIGHTS.switchRate * normSwitchRateEffective +
     SCORING_WEIGHTS.intentGap * intentGap +
     SCORING_WEIGHTS.snoozePressure * snoozePressureNorm
-  )
+  );
 
-  const mult = isLateNightHour(getLocalHour(snapshot)) ? LATE_NIGHT_MULTIPLIER : 1.0
-  const procrastinationScore = clamp(Math.round((base + snoozePressure) * mult), 0, 100)
+  const lateNightMult = isLateNight(signals.timeOfDayLocal) ? LATE_NIGHT_MULTIPLIER : 1.0;
+  const score = clamp(Math.round((base + snoozePressure) * lateNightMult), 0, 100);
 
-  return { procrastinationScore, severity: scoreToSeverity(procrastinationScore) }
+  const band = SEVERITY_BANDS.find(b => score >= b.scoreMin && score <= b.scoreMax);
+  const severity: Severity = band ? band.severity : 0;
+
+  return { score, severity };
 }
 
+/**
+ * Escalate severity if the user has been snoozing interventions.
+ * Each 2 snoozes bumps severity up by 1, capped at 4.
+ *
+ * Matches apps/api/app/services/escalation.py:apply_snooze_escalation.
+ */
 export function applySnoozeEscalation(severity: Severity, snoozesLast60Min: number): Severity {
-  const bump = Math.floor(Math.max(0, snoozesLast60Min) / 2)
-  return clamp(severity + bump, 0, 4) as Severity
+  const bump = Math.floor(snoozesLast60Min / 2);
+  return Math.min(severity + bump, 4) as Severity;
 }
 
+/**
+ * Generate human-readable reasons that explain the procrastination score.
+ *
+ * This is the single source of truth — the Python API
+ * (apps/api/app/services/scoring.py:compute_reasons) must mirror this logic.
+ */
 export function generateReasons(snapshot: UsageSnapshot, score: number): string[] {
-  const reasons: string[] = []
+  const reasons: string[] = [];
+  const { signals, categories, focusIntent } = snapshot;
 
-  const isDistractingNow = isDistractingCategory(snapshot.categories.activeCategory)
-
-  const distractRatioRaw = typeof snapshot.signals.recentDistractRatio === 'number'
-    ? snapshot.signals.recentDistractRatio
-    : (snapshot.signals.sessionMinutes > 0
-        ? snapshot.signals.distractingMinutes / snapshot.signals.sessionMinutes
-        : 0)
-
-  const distractRatio = clamp(distractRatioRaw, 0, 1)
-  const effectiveDistractRatio = isDistractingNow ? Math.max(distractRatio, 0.9) : distractRatio
-
-  if (effectiveDistractRatio >= 0.7) {
-    reasons.push('High distracting time recently')
-  } else if (effectiveDistractRatio >= 0.4) {
-    reasons.push('A lot of recent time is distracting')
-  } else if (effectiveDistractRatio >= 0.2) {
-    reasons.push('Some recent time is distracting')
+  // Distraction ratio (two tiers)
+  if (signals.sessionMinutes > 0) {
+    const ratio = signals.distractingMinutes / signals.sessionMinutes;
+    if (ratio > 0.5) {
+      reasons.push('Spending most of your time on distracting apps');
+    } else if (ratio > 0.25) {
+      reasons.push('Some time spent on distracting apps');
+    }
   }
 
-  const switchesPerMin = snapshot.signals.appSwitchesLast5Min / 5
-  if (isDistractingNow || effectiveDistractRatio >= 0.2) {
-    if (switchesPerMin >= 8) reasons.push('Very frequent app switching')
-    else if (switchesPerMin >= 4) reasons.push('Frequent app switching')
-    else if (switchesPerMin >= 2) reasons.push('Some app switching')
+  // Switch rate (per-minute, two tiers)
+  const switchesPerMin = signals.appSwitchesLast5Min / 5;
+  if (switchesPerMin >= 11) {
+    reasons.push('Rapidly switching between apps');
+  } else if (switchesPerMin >= 5) {
+    reasons.push('Switching between apps frequently');
   }
 
-  if (snapshot.focusIntent !== null && isDistractingNow) {
-    const where = snapshot.categories.activeDomain ?? snapshot.categories.activeApp
-    reasons.push(`Focus intent "${snapshot.focusIntent.label}" — but you're on ${where}`)
+  // Intent gap: using distracting app when focus intent is set
+  if (
+    focusIntent !== null &&
+    (categories.activeCategory === 'social' || categories.activeCategory === 'entertainment')
+  ) {
+    const domainInfo = categories.activeDomain ? ` on ${categories.activeDomain}` : '';
+    reasons.push(
+      `Using ${categories.activeApp}${domainInfo} instead of working on '${focusIntent.label}'`,
+    );
+  } else if (
+    categories.activeCategory === 'social' || categories.activeCategory === 'entertainment'
+  ) {
+    // No focus intent set — still note the distracting app
+    const domainInfo = categories.activeDomain ? ` on ${categories.activeDomain}` : '';
+    reasons.push(`Using ${categories.activeApp}${domainInfo} (${categories.activeCategory})`);
   }
 
-  if (snapshot.signals.snoozesLast60Min >= 2) {
-    reasons.push(`Snoozed ${snapshot.signals.snoozesLast60Min} times in the last hour`)
+  // Snooze pressure
+  if (signals.snoozesLast60Min >= 2) {
+    reasons.push(`Dismissed reminders ${signals.snoozesLast60Min} times recently`);
   }
 
-  if (isLateNightHour(getLocalHour(snapshot))) {
-    reasons.push('Late-night hours increase distraction')
+  // Late night
+  if (isLateNight(signals.timeOfDayLocal)) {
+    reasons.push('Working late at night (scores are stricter after 11 PM)');
   }
 
+  // Fallbacks
   if (reasons.length === 0 && score > 0) {
-    reasons.push('Mild distraction detected')
+    reasons.push('Mild distraction detected');
   }
-
   if (reasons.length === 0) {
-    reasons.push("You're focused — keep it up!")
+    reasons.push("You're focused — keep it up!");
   }
 
-  return reasons
+  return reasons;
 }
-
