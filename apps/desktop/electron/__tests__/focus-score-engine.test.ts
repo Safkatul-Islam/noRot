@@ -2,95 +2,83 @@ import { describe, it, expect } from 'vitest';
 import { FocusScoreEngine } from '@norot/shared';
 
 describe('FocusScoreEngine', () => {
-  it('decreases by 3 points/sec while distracting at low switch rate', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
-
-    for (let i = 0; i < 10; i++) {
-      engine.tick({
-        activeCategory: 'social',
-        appSwitchesLast5Min: 0,
-        elapsedMs: 1000,
-      });
-    }
-
-    expect(engine.getFocusScore()).toBe(70);
-  });
-
-  it('can pause decay while distracting via decayScale=0', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
-
-    for (let i = 0; i < 10; i++) {
-      engine.tick({
-        activeCategory: 'social',
-        appSwitchesLast5Min: 0,
-        elapsedMs: 1000,
-        decayScale: 0,
-      });
-    }
-
+  it('starts at 100 (Locked In)', () => {
+    const engine = new FocusScoreEngine();
     expect(engine.getFocusScore()).toBe(100);
   });
 
-  it('can slow decay while distracting via decayScale=0.5', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+  it('drops one level every 5 seconds of distraction', () => {
+    const engine = new FocusScoreEngine();
 
-    for (let i = 0; i < 10; i++) {
-      engine.tick({
-        activeCategory: 'social',
-        appSwitchesLast5Min: 0,
-        elapsedMs: 1000,
-        decayScale: 0.5,
-      });
+    // 5 seconds of social → level 1 (score 75)
+    for (let i = 0; i < 5; i++) {
+      engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
+    expect(engine.getFocusScore()).toBe(75);
 
-    // base decay at low switch rate is 3/sec -> half-rate is 1.5/sec
-    expect(engine.getFocusScore()).toBe(85);
+    // 5 more seconds → level 2 (score 50)
+    for (let i = 0; i < 5; i++) {
+      engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(50);
   });
 
-  it('caps decay at 6 points/sec at very high switch rate', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+  it('clamps at 0 after extended distraction', () => {
+    const engine = new FocusScoreEngine();
 
-    for (let i = 0; i < 10; i++) {
-      engine.tick({
-        activeCategory: 'entertainment',
-        appSwitchesLast5Min: 100, // 20/min -> normalized=1.0 -> decay=6/sec
-        elapsedMs: 1000,
-      });
+    for (let i = 0; i < 30; i++) {
+      engine.tick({ activeCategory: 'entertainment', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
-
-    expect(engine.getFocusScore()).toBe(40);
+    expect(engine.getFocusScore()).toBe(0);
   });
 
-  it('recovers by 2 points/sec while not distracting', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 40, recoveryPerSec: 2 });
+  it('recovers one level every 2 seconds of productive use', () => {
+    const engine = new FocusScoreEngine();
 
-    for (let i = 0; i < 10; i++) {
-      engine.tick({
-        activeCategory: 'productive',
-        appSwitchesLast5Min: 0,
-        elapsedMs: 1000,
-      });
+    // Tank the score to level 4 (score 0)
+    for (let i = 0; i < 20; i++) {
+      engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
-
-    expect(engine.getFocusScore()).toBe(60);
-  });
-
-  it('clamps at 0 and 100', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 2, recoveryPerSec: 2 });
-    engine.tick({
-      activeCategory: 'entertainment',
-      appSwitchesLast5Min: 100, // decay=6/sec
-      elapsedMs: 1000,
-    });
     expect(engine.getFocusScore()).toBe(0);
 
-    for (let i = 0; i < 100; i++) {
-      engine.tick({
-        activeCategory: 'neutral',
-        appSwitchesLast5Min: 0,
-        elapsedMs: 1000,
-      });
+    // 2 seconds → level 3 (score 25)
+    for (let i = 0; i < 2; i++) {
+      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(25);
+
+    // 2 more seconds → level 2 (score 50)
+    for (let i = 0; i < 2; i++) {
+      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(50);
+
+    // 2 more seconds → level 1 (score 75)
+    for (let i = 0; i < 2; i++) {
+      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(75);
+
+    // 2 more seconds → level 0 (score 100, Locked In)
+    for (let i = 0; i < 2; i++) {
+      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(100);
+  });
+
+  it('neutral apps freeze the score', () => {
+    const engine = new FocusScoreEngine();
+
+    // Drop to level 2
+    for (let i = 0; i < 10; i++) {
+      engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(50);
+
+    // 30 seconds of neutral — no change
+    for (let i = 0; i < 30; i++) {
+      engine.tick({ activeCategory: 'neutral', appSwitchesLast5Min: 0, elapsedMs: 1000 });
+    }
+    expect(engine.getFocusScore()).toBe(50);
   });
 });

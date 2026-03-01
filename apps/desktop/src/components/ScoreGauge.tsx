@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { motion } from 'motion/react';
 import { useScoreStore } from '@/stores/score-store';
 import { toFocusScore, getFocusBand } from '@norot/shared';
-import { NumberTicker } from '@/components/effects/NumberTicker';
 
 const SIZE = 220;
 const STROKE_WIDTH = 12;
@@ -179,36 +178,23 @@ export function ScoreGauge() {
             />
           )}
 
-          {/* Severity label inside the arc */}
+          {/* Severity label inside the arc — centered as main display */}
           <text
             x={CENTER}
-            y={CENTER + 32}
+            y={CENTER}
             textAnchor="middle"
             dominantBaseline="central"
             style={{
-              fontSize: 11,
-              fontWeight: 600,
+              fontSize: 16,
+              fontWeight: 700,
               fill: color,
-              letterSpacing: '0.1em',
+              letterSpacing: '0.12em',
               textTransform: 'uppercase',
-              opacity: 0.8,
             }}
           >
             {label}
           </text>
         </svg>
-
-        {/* Score number overlay — spring-animated */}
-        <div className="absolute inset-0 flex items-center justify-center pb-6">
-          <NumberTicker
-            value={focusScore}
-            className="text-5xl font-bold"
-            style={{
-              color,
-              textShadow: `0 0 20px ${color}60, 0 0 40px ${color}30`,
-            }}
-          />
-        </div>
       </div>
     </div>
   );

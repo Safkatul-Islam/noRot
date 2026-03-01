@@ -9,172 +9,184 @@ function simulate(
   engine: FocusScoreEngine,
   category: string,
   durationSec: number,
-  opts?: { tickMs?: number; switches?: number },
+  opts?: { tickMs?: number },
 ): number {
   const tickMs = opts?.tickMs ?? 1000
-  const switches = opts?.switches ?? 0
   const ticks = Math.round((durationSec * 1000) / tickMs)
   let result = { focusScore: 100, decayPerSec: 0, recoveryPerSec: 0 }
   for (let i = 0; i < ticks; i++) {
     result = engine.tick({
       activeCategory: category,
-      appSwitchesLast5Min: switches,
+      appSwitchesLast5Min: 0,
       elapsedMs: tickMs,
     })
   }
   return result.focusScore
 }
 
-describe('FocusScoreEngine — new three-layer architecture', () => {
-  test('starts at 100 and returns correct initial score', () => {
+describe('FocusScoreEngine — simple level-based timer', () => {
+  test('starts at 100 (Locked In)', () => {
     const engine = new FocusScoreEngine()
     expect(engine.getFocusScore()).toBe(100)
   })
 
-  test('quick glance (<10 sec) at social barely moves score', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('distraction drops one level every 5 seconds', () => {
+    const engine = new FocusScoreEngine()
 
-    // Establish some focus history first (10 sec)
-    simulate(engine, 'productive', 10)
+    // After 5 seconds of social media → level 1 (score 75)
+    const after5 = simulate(engine, 'social', 5)
+    expect(after5).toBe(75)
 
-    const before = engine.getFocusScore()
-    // 8-second Instagram glance
-    const after = simulate(engine, 'social', 8)
+    // After 10 seconds total → level 2 (score 50)
+    const after10 = simulate(engine, 'social', 5)
+    expect(after10).toBe(50)
 
-    // Score should barely change — momentum buffer absorbs it
-    // The distracted ratio in 30-sec window will be < 0.33 so decay gate = 0
-    expect(after).toBeGreaterThanOrEqual(before - 5)
+    // After 15 seconds total → level 3 (score 25)
+    const after15 = simulate(engine, 'social', 5)
+    expect(after15).toBe(25)
+
+    // After 20 seconds total → level 4 (score 0, Cooked)
+    const after20 = simulate(engine, 'social', 5)
+    expect(after20).toBe(0)
   })
 
-  test('extended distraction (5 min) drops score significantly', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('score caps at 0 (level 4) and does not go lower', () => {
+    const engine = new FocusScoreEngine()
 
-    // 5 minutes of social media
-    const score = simulate(engine, 'social', 300)
-
-    // Should be in "Very Distracted" range or lower (below 40)
-    expect(score).toBeLessThan(40)
+    // 60 seconds of distraction — should cap at 0
+    const score = simulate(engine, 'social', 60)
+    expect(score).toBe(0)
   })
 
-  test('long focus session protects against brief distraction', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('focused use recovers one level every 2 seconds', () => {
+    const engine = new FocusScoreEngine()
 
-    // 60 minutes of focused work
-    simulate(engine, 'productive', 3600)
-    const beforeDistraction = engine.getFocusScore()
+    // Get distracted for 15 seconds → level 3 (score 25)
+    simulate(engine, 'social', 15)
+    expect(engine.getFocusScore()).toBe(25)
 
-    // 1 minute of social media
-    const afterDistraction = simulate(engine, 'social', 60)
+    // 2 seconds of productive work → level 2 (score 50)
+    const after2 = simulate(engine, 'productive', 2)
+    expect(after2).toBe(50)
 
-    // Score should stay relatively high thanks to:
-    // - Session history (good session = 40% decay)
-    // - Focus streak shield (60 min = 0.5x decay)
-    // With all modifiers, ~30-35 pt drop for 1 min distraction after 60 min focus
-    expect(afterDistraction).toBeGreaterThanOrEqual(beforeDistraction - 35)
+    // 2 more seconds → level 1 (score 75)
+    const after4 = simulate(engine, 'productive', 2)
+    expect(after4).toBe(75)
+
+    // 2 more seconds → level 0 (score 100, Locked In)
+    const after6 = simulate(engine, 'productive', 2)
+    expect(after6).toBe(100)
   })
 
-  test('slow recovery after heavy distraction session', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('less than 2 seconds of productive use does not recover a level', () => {
+    const engine = new FocusScoreEngine()
 
-    // 30 minutes of YouTube
-    simulate(engine, 'entertainment', 1800)
-    const afterDistraction = engine.getFocusScore()
-    expect(afterDistraction).toBeLessThanOrEqual(5)
+    // Get distracted → level 2 (score 50)
+    simulate(engine, 'social', 10)
+    expect(engine.getFocusScore()).toBe(50)
 
-    // 2 minutes of VS Code — should not bounce back quickly
-    const afterRecovery = simulate(engine, 'productive', 120)
-
-    // Session history keeps recovery slow — should still be well below 50
-    expect(afterRecovery).toBeLessThan(50)
+    // Only 1 second of productive use — not enough to recover a level
+    const score = simulate(engine, 'productive', 1)
+    expect(score).toBe(50)
   })
 
-  test('rapid switching causes net decline', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 80 })
+  test('neutral apps freeze the timer (no change)', () => {
+    const engine = new FocusScoreEngine()
 
-    // Alternate between productive and social every 5 seconds for 2 minutes
-    for (let i = 0; i < 24; i++) {
-      const category = i % 2 === 0 ? 'productive' : 'social'
-      simulate(engine, category, 5, { switches: 50 })
-    }
+    // Get distracted → level 2 (score 50)
+    simulate(engine, 'social', 10)
+    expect(engine.getFocusScore()).toBe(50)
 
-    const score = engine.getFocusScore()
-    // Should decline from 80 due to switching + partial momentum gates
-    expect(score).toBeLessThan(80)
+    // 30 seconds of neutral app — no change
+    const score = simulate(engine, 'neutral', 30)
+    expect(score).toBe(50)
   })
 
-  test('momentum buffer: 30-sec grace period works for recovery too', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('neutral apps pause recovery without losing banked time', () => {
+    const engine = new FocusScoreEngine()
 
-    // Tank the score first
-    simulate(engine, 'social', 300)
-    const tanked = engine.getFocusScore()
-    expect(tanked).toBeLessThan(20)
+    // Get distracted → level 3 (score 25)
+    simulate(engine, 'social', 15)
+    expect(engine.getFocusScore()).toBe(25)
 
-    // 8 seconds of VS Code shouldn't recover much (momentum buffer blocks it)
-    const after8sec = simulate(engine, 'productive', 8)
-    expect(after8sec - tanked).toBeLessThanOrEqual(5)
+    // 1 second of productive work (not enough for a full level — need 2s)
+    simulate(engine, 'productive', 1)
+    expect(engine.getFocusScore()).toBe(25)
+
+    // Switch to neutral (e.g. Finder) — pauses but doesn't reset banked time
+    simulate(engine, 'neutral', 3)
+    expect(engine.getFocusScore()).toBe(25)
+
+    // 1 more second of productive work — banked 1 + 1 = 2s → recover one level
+    const score = simulate(engine, 'productive', 1)
+    expect(score).toBe(50) // level 2
   })
 
-  test('session history: time-weighted ratio favors recent activity', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('distraction wipes all recovery progress', () => {
+    const engine = new FocusScoreEngine()
 
-    // 30 minutes of focused work, then 10 min of distraction
-    simulate(engine, 'productive', 1800)
-    simulate(engine, 'social', 600)
-    const afterDistraction = engine.getFocusScore()
+    // Get distracted → level 3 (score 25)
+    simulate(engine, 'social', 15)
+    expect(engine.getFocusScore()).toBe(25)
 
-    // Now recover — session history still remembers good session, recovery should be decent
-    simulate(engine, 'productive', 120)
-    const afterRecovery = engine.getFocusScore()
+    // 1 second of productive work (banked some recovery time, but not enough for a level)
+    simulate(engine, 'productive', 1)
+    expect(engine.getFocusScore()).toBe(25)
 
-    expect(afterRecovery).toBeGreaterThan(afterDistraction)
+    // Switch to distracted app — wipes all recovery progress
+    simulate(engine, 'social', 1)
+    expect(engine.getFocusScore()).toBe(25)
+
+    // Now need a full 2 seconds of productive work to recover one level (banked time is gone)
+    simulate(engine, 'productive', 1)
+    expect(engine.getFocusScore()).toBe(25) // not enough yet
+
+    const score = simulate(engine, 'productive', 1)
+    expect(score).toBe(50) // now 2s total → recovered one level
   })
 
-  test('distraction streak accelerator: longer on distraction = faster decay', () => {
-    // Engine A: 1 minute of distraction
-    const engineA = new FocusScoreEngine({ initialFocusScore: 80 })
-    // Build up some buffer so momentum gate opens
-    simulate(engineA, 'social', 30)
-    const scoreA30 = engineA.getFocusScore()
-    simulate(engineA, 'social', 30)
-    const scoreA60 = engineA.getFocusScore()
-    const dropA = scoreA30 - scoreA60
+  test('switching from distracted to neutral to distracted resets timer', () => {
+    const engine = new FocusScoreEngine()
 
-    // Engine B: start at same point but has been distracted for 4 minutes already
-    const engineB = new FocusScoreEngine({ initialFocusScore: 80 })
-    simulate(engineB, 'social', 240) // 4 minutes to build streak
-    const scoreBBefore = engineB.getFocusScore()
-    simulate(engineB, 'social', 30)
-    const scoreBAfter = engineB.getFocusScore()
-    const dropB = scoreBBefore - scoreBAfter
+    // 4 seconds of distraction (not yet at level 1)
+    simulate(engine, 'social', 4)
+    expect(engine.getFocusScore()).toBe(100)
 
-    // dropB should be larger due to streak acceleration
-    expect(dropB).toBeGreaterThanOrEqual(dropA)
+    // Switch to neutral briefly (resets distraction timer)
+    simulate(engine, 'neutral', 1)
+
+    // 4 more seconds of distraction — timer restarted so still level 0
+    const score = simulate(engine, 'social', 4)
+    expect(score).toBe(100)
   })
 
-  test('neutral apps drift slowly toward session average', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 50 })
+  test('entertainment category counts as distraction', () => {
+    const engine = new FocusScoreEngine()
 
-    // Build a good session
-    simulate(engine, 'productive', 600)
-    const before = engine.getFocusScore()
-
-    // Neutral app for 30 seconds
-    const after = simulate(engine, 'neutral', 30)
-
-    // Should drift slightly upward since session is focused
-    expect(after).toBeGreaterThanOrEqual(before - 1)
+    const score = simulate(engine, 'entertainment', 10)
+    expect(score).toBe(50) // level 2
   })
 
-  test('decayScale of 0 prevents decay', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
+  test('reset clears all state back to Locked In', () => {
+    const engine = new FocusScoreEngine()
 
-    // Build enough history for momentum gate to open
-    simulate(engine, 'social', 30)
-    const scoreBefore = engine.getFocusScore()
+    // Get fully distracted
+    simulate(engine, 'social', 20)
+    expect(engine.getFocusScore()).toBe(0)
 
-    // Now tick with decayScale = 0
-    for (let i = 0; i < 10; i++) {
+    engine.reset()
+    expect(engine.getFocusScore()).toBe(100)
+
+    // After reset, distraction starts fresh
+    const score = simulate(engine, 'social', 5)
+    expect(score).toBe(75) // level 1
+  })
+
+  test('decayScale is accepted but ignored (interface compatibility)', () => {
+    const engine = new FocusScoreEngine()
+
+    // decayScale = 0 should NOT prevent decay in new engine
+    for (let i = 0; i < 5; i++) {
       engine.tick({
         activeCategory: 'social',
         appSwitchesLast5Min: 0,
@@ -182,25 +194,7 @@ describe('FocusScoreEngine — new three-layer architecture', () => {
         decayScale: 0,
       })
     }
-    const scoreAfter = engine.getFocusScore()
-
-    // Should not have decayed further
-    expect(scoreAfter).toBe(scoreBefore)
-  })
-
-  test('reset clears all state', () => {
-    const engine = new FocusScoreEngine({ initialFocusScore: 100 })
-
-    // Accumulate some history
-    simulate(engine, 'social', 120)
-    expect(engine.getFocusScore()).toBeLessThan(100)
-
-    engine.reset(100)
-    expect(engine.getFocusScore()).toBe(100)
-
-    // After reset, a quick glance should be absorbed again (fresh momentum buffer)
-    simulate(engine, 'productive', 10)
-    const afterGlance = simulate(engine, 'social', 5)
-    expect(afterGlance).toBeGreaterThanOrEqual(95)
+    // 5 seconds of distraction → level 1
+    expect(engine.getFocusScore()).toBe(75)
   })
 })

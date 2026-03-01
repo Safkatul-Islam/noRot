@@ -55,7 +55,7 @@ procrastination isn't just about being lazy. it messes with your mental health, 
 
 ## architecture
 
-<!-- TODO: add architecture diagram -->
+![Architecture Overview](docs/architecture/architecture-overview.png)
 
 the app is split into three layers:
 

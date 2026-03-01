@@ -88,11 +88,11 @@ export interface FocusBand {
 }
 
 export const FOCUS_SEVERITY_BANDS: FocusBand[] = [
-  { label: 'Locked In', scoreMin: 85, scoreMax: 100, color: '#22c55e' },
-  { label: 'Focused', scoreMin: 65, scoreMax: 84, color: '#4ade80' },
-  { label: 'Slightly Distracted', scoreMin: 40, scoreMax: 64, color: '#eab308' },
-  { label: 'Very Distracted', scoreMin: 15, scoreMax: 39, color: '#f97316' },
-  { label: 'Cooked', scoreMin: 0, scoreMax: 14, color: '#ef4444' },
+  { label: 'Locked In', scoreMin: 88, scoreMax: 100, color: '#22c55e' },
+  { label: 'Focused', scoreMin: 63, scoreMax: 87, color: '#4ade80' },
+  { label: 'Slightly Distracted', scoreMin: 38, scoreMax: 62, color: '#eab308' },
+  { label: 'Very Distracted', scoreMin: 13, scoreMax: 37, color: '#f97316' },
+  { label: 'Cooked', scoreMin: 0, scoreMax: 12, color: '#ef4444' },
 ];
 
 export function getFocusBand(focusScore: number): FocusBand {

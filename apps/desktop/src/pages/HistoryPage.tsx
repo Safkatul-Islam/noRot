@@ -6,8 +6,7 @@ import { ScoreHistoryChart } from '@/components/ScoreHistoryChart';
 import { BlurFade } from '@/components/effects/BlurFade';
 
 import { useScoreStore } from '@/stores/score-store';
-import { SEVERITY_BANDS, toFocusScore } from '@norot/shared';
-import type { Severity } from '@norot/shared';
+import { SEVERITY_BANDS, toFocusScore, getFocusBand } from '@norot/shared';
 import {
   TrendingUp,
   BarChart3,
@@ -61,26 +60,26 @@ export function HistoryPage() {
   const trendLabel = stats.trend === 'improving' ? 'Improving' : stats.trend === 'worsening' ? 'Worsening' : 'Stable';
 
   const statItems = [
-    { icon: BarChart3, color: 'text-primary', label: 'Average', value: stats.avg },
-    { icon: AlertTriangle, color: 'text-danger', label: 'Worst', value: stats.worst },
-    { icon: Trophy, color: 'text-success', label: 'Best', value: stats.best },
+    { icon: BarChart3, label: 'Average', value: getFocusBand(stats.avg).label, bandColor: getFocusBand(stats.avg).color },
+    { icon: AlertTriangle, label: 'Worst', value: getFocusBand(stats.worst).label, bandColor: getFocusBand(stats.worst).color },
+    { icon: Trophy, label: 'Best', value: getFocusBand(stats.best).label, bandColor: getFocusBand(stats.best).color },
   ];
 
   return (
     <div className="flex flex-col gap-5 h-full">
       {/* Top row: floating stat pills with staggered float animation */}
       <div className="flex items-center gap-3 shrink-0">
-        {statItems.map(({ icon: Icon, color, label, value }, i) => (
+        {statItems.map(({ icon: Icon, label, value, bandColor }, i) => (
           <BlurFade key={label} delay={i * 0.05}>
             <motion.div
               animate={{ y: [0, -3, 0] }}
               transition={{ duration: 5, repeat: Infinity, delay: i * 0.7, ease: 'easeInOut' }}
               className="flex items-center gap-2.5 rounded-2xl border border-white/[0.06] bg-[var(--color-glass-well)] backdrop-blur-[20px] px-4 py-3"
             >
-              <Icon className={`size-5 ${color} shrink-0`} />
+              <Icon className="size-5 shrink-0" style={{ color: bandColor }} />
               <div>
                 <p className="text-[10px] text-text-muted uppercase tracking-wider">{label}</p>
-                <p className="text-xl font-bold text-text-primary tabular-nums">{value}</p>
+                <p className="text-sm font-bold" style={{ color: bandColor }}>{value}</p>
               </div>
             </motion.div>
           </BlurFade>
@@ -209,12 +208,6 @@ export function HistoryPage() {
                             {SEVERITY_BANDS[entry.severity]?.label}
                           </span>
                         </div>
-                        <span
-                          className="text-sm font-medium tabular-nums"
-                          style={{ color: SEVERITY_BANDS[entry.severity]?.color ?? '#8b5cf6' }}
-                        >
-                          {toFocusScore(entry.score)}
-                        </span>
                       </div>
                     ))}
                   </div>
