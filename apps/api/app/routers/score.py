@@ -62,7 +62,7 @@ async def score_snapshot(
     # 4. Gather human-readable reasons
     reasons = compute_reasons(snapshot, proc_score)
 
-    # 5. Persist to history
+    # 5. Persist to history and store the raw snapshot
     db.insert_score(
         timestamp=snapshot.timestamp,
         score=proc_score,
@@ -70,6 +70,10 @@ async def score_snapshot(
         persona=persona,
         mode=mode,
         text=text,
+    )
+    db.insert_snapshot(
+        timestamp=snapshot.timestamp,
+        data=snapshot.model_dump_json(by_alias=True),
     )
 
     return ScoreResponse(

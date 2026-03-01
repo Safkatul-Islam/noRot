@@ -1,47 +1,59 @@
-from __future__ import annotations
+"""POST /intervention, PATCH /intervention/{id}, GET /interventions."""
 
-from fastapi import APIRouter, Query, status
+from typing import Literal
 
-from app.db import get_intervention, get_interventions, insert_intervention, update_intervention_response
-from app.models import InterventionEvent, InterventionUpdateRequest
+from fastapi import APIRouter, Query
+from pydantic import BaseModel, ConfigDict, Field
 
-router = APIRouter(tags=["intervention"])
+from ..models import InterventionEvent
+from .. import db
+
+router = APIRouter()
 
 
-@router.post("/intervention", response_model=InterventionEvent, status_code=status.HTTP_201_CREATED)
-def create_intervention(event: InterventionEvent) -> InterventionEvent:
-    insert_intervention(
+class InterventionUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_response: Literal["snoozed", "dismissed", "working"] = Field(
+        alias="userResponse"
+    )
+
+
+@router.post("/intervention", status_code=201, response_model=InterventionEvent)
+async def create_intervention(event: InterventionEvent):
+    """Log a new intervention event from the desktop client."""
+    db.insert_intervention(
         id=event.id,
         timestamp=event.timestamp,
         score=event.score,
-        severity=int(event.severity),
+        severity=event.severity,
         persona=event.persona,
         text=event.text,
-        user_response=event.user_response,
-        audio_played=event.audio_played,
     )
     return event
 
 
-@router.patch("/intervention/{intervention_id}", response_model=InterventionEvent)
-def update_intervention(intervention_id: str, body: InterventionUpdateRequest) -> InterventionEvent:
-    update_intervention_response(intervention_id, body.user_response)
-    row = get_intervention(intervention_id)
-    if row:
-        return InterventionEvent(**row)
-    return InterventionEvent(
-        id=intervention_id,
-        timestamp=0,
-        score=0.0,
-        severity=0,
-        persona="calm_friend",
-        text="",
-        user_response=body.user_response,
-        audio_played=False,
-    )
+@router.patch("/intervention/{intervention_id}")
+async def update_intervention(intervention_id: str, body: InterventionUpdate):
+    """Update the user's response to an intervention."""
+    db.update_intervention_response(intervention_id, body.user_response)
+    return {"id": intervention_id, "userResponse": body.user_response}
 
 
-@router.get("/interventions", response_model=list[InterventionEvent])
-def interventions(limit: int = Query(100, ge=1, le=1000)) -> list[InterventionEvent]:
-    rows = get_interventions(limit=limit)
-    return [InterventionEvent(**r) for r in rows]
+@router.get("/interventions")
+async def list_interventions(limit: int = Query(50, ge=1, le=500)):
+    """Return recent interventions, newest first."""
+    rows = db.get_interventions(limit=limit)
+    return [
+        {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "score": row["score"],
+            "severity": row["severity"],
+            "persona": row["persona"],
+            "text": row["text"],
+            "userResponse": row["user_response"],
+            "audioPlayed": bool(row["audio_played"]),
+        }
+        for row in rows
+    ]

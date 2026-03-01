@@ -1,15 +1,27 @@
-from __future__ import annotations
+"""GET /stats/apps - Aggregated app usage statistics."""
 
 from fastapi import APIRouter, Query
 
-from app.db import get_app_stats
-from app.models import AppStatEntry
+from .. import db
 
-router = APIRouter(tags=["stats"])
+router = APIRouter()
 
 
-@router.get("/stats/apps", response_model=list[AppStatEntry])
-def app_stats(minutes: int = Query(60, ge=1, le=24 * 60)) -> list[AppStatEntry]:
-    rows = get_app_stats(minutes=minutes)
-    return [AppStatEntry(**r) for r in rows]
+@router.get("/stats/apps")
+async def get_app_stats(minutes: int | None = Query(default=None, ge=1)):
+    """Return aggregated app usage from stored snapshots.
 
+    Query params:
+        minutes: optional time window in minutes (e.g. 60 for last hour).
+    """
+    rows = db.get_app_stats(minutes=minutes)
+
+    return [
+        {
+            "appName": row["app_name"],
+            "domain": row.get("domain"),
+            "category": row["category"],
+            "count": row["count"],
+        }
+        for row in rows
+    ]
