@@ -203,7 +203,7 @@ export function registerIpcHandlers(): void {
     (_event, settings: Record<string, unknown>) => {
       const currentSettings = database.getSettings();
 
-      // Enforce 18+ gating for explicit tough love.
+      // Safety gate: only allow the Tough Love persona if the user opted in.
       const nextToughLoveAllowed =
         typeof settings.toughLoveExplicitAllowed === 'boolean'
           ? settings.toughLoveExplicitAllowed

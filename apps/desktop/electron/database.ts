@@ -476,7 +476,7 @@ export function getSettings(): UserSettings {
     }
   }
 
-  // Safety gate: never allow explicit Tough Love persona unless user opted in.
+  // Safety gate: never allow Tough Love persona unless user opted in.
   if (settings.persona === 'tough_love' && settings.toughLoveExplicitAllowed !== true) {
     settings.persona = 'coach';
   }

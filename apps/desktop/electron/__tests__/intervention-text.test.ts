@@ -22,7 +22,7 @@ describe('buildInterventionText', () => {
     });
     expect(text.toLowerCase()).toContain('instagram');
     expect(text.toLowerCase()).toContain('pulling you away');
-    expect(text.toLowerCase()).toContain('stupid ass');
+    expect(text.toLowerCase()).toContain('dumb habit');
   });
 
   it('escalates with severity', () => {
@@ -40,7 +40,7 @@ describe('buildInterventionText', () => {
     expect(text.toLowerCase()).toContain('breathe');
   });
 
-  it('tough love can be explicit + loud', () => {
+  it('tough love is loud + harsh (pg-13)', () => {
     const text = buildInterventionText(1, 'tough_love', {
       activeApp: 'Google Chrome',
       activeCategory: 'entertainment',
@@ -51,9 +51,10 @@ describe('buildInterventionText', () => {
       activitySource: undefined,
     });
     expect(text).toContain('BRUH');
-    expect(text).toMatch(/WHAT THE FUCK/);
+    expect(text).toMatch(/WHAT THE HELL/);
     expect(text).toMatch(/[A-Z]{3,}/);
-    expect(text.toLowerCase()).toMatch(/\b(fuck|bitch|bastard|idiot|dumbass|stupid ass)\b/);
+    // Harsh but safe: avoid explicit profanity.
+    expect(text.toLowerCase()).not.toMatch(/\b(fuck|shit|bitch|dumbass)\b/);
   });
 
   it('zero-focus message is long and action-oriented', () => {

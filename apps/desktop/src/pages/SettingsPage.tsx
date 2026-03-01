@@ -88,12 +88,12 @@ const PREVIEW_VARIANTS: Record<Persona, Record<1 | 2 | 3 | 4, string[]>> = {
       'Crisis means simplify. One task. One step. Then reassess.',
     ],
   },
-  tough_love: {
-    1: [
-      'BRUH. You\'re off task. WHAT THE FUCK were you actually about to work on?',
-      'Quick reality check: is this the plan, or is your brain freelancing again?',
-      'That\'s not "research." That\'s procrastination with extra steps. What\'s next?',
-    ],
+    tough_love: {
+      1: [
+        'BRUH. You\'re off task. WHAT THE HELL were you actually about to work on?',
+        'Quick reality check: is this the plan, or is your brain freelancing again?',
+        'That\'s not "research." That\'s procrastination with extra steps. What\'s next?',
+      ],
     2: [
       'Still off task? Cool. Pick ONE 5-minute step and do it. No more messing around.',
       'CLOSE IT and open the work. What\'s the next tiny deliverable?',

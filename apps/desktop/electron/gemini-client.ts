@@ -52,13 +52,13 @@ async function generateScriptInternal(opts: GenerateScriptOpts): Promise<string 
         `- Keep it natural for text-to-speech (no emojis, no markdown, no special characters).\n` +
         `- Match the intensity to the severity level.\n` +
         `- Be unique and varied each time — never repeat the same phrasing.\n` +
-        (isExplicitToughLove
-          ? `- You MAY use profanity and aggressive humor (18+). You can be loud, dramatic, and funny.\n` +
-            `- Internet slang is okay (bruh, lol, lmao). All-caps emphasis is allowed.\n` +
-            `- No slurs, hate, or threats. Don't insult the user's identity — roast the behavior/loop.\n` +
-            `- It's okay to give direct commands (e.g., "Close it and start").\n`
-          : `- Never shame or blame. Ask curious questions like "What's making it hard to start?" instead of commands like "Stop wasting time."\n`) +
-        `- Suggest the smallest possible next step to lower the barrier to action.`;
+         (isExplicitToughLove
+           ? `- Keep it PG-13: no explicit profanity. You can be loud, dramatic, and funny.\n` +
+             `- Internet slang is okay (bruh, lol, lmao). All-caps emphasis is allowed.\n` +
+             `- No slurs, hate, or threats. Don't insult the user's identity — roast the behavior/loop.\n` +
+             `- It's okay to give direct commands (e.g., "Close it and start").\n`
+           : `- Never shame or blame. Ask curious questions like "What's making it hard to start?" instead of commands like "Stop wasting time."\n`) +
+         `- Suggest the smallest possible next step to lower the barrier to action.`;
 
       userPrompt =
         `Generate a ${band.mode}-level intervention message. ` +
@@ -89,15 +89,15 @@ async function generateScriptInternal(opts: GenerateScriptOpts): Promise<string 
         `- Write exactly 1-2 sentences.\n` +
         `- Speak directly to the user in second person.\n` +
         `- If the user is doing something relevant to their task, encourage them.\n` +
-        (isExplicitToughLove
-          ? `- If not, redirect them hard with aggressive humor (18+). Profanity allowed.\n` +
-            `- Internet slang is okay (bruh, lol, lmao). All-caps emphasis is allowed.\n` +
-            `- No slurs, hate, or threats. Don't insult the user's identity — roast the behavior/loop.\n`
-          : `- If not, gently redirect them toward their tasks with curiosity, not commands.\n` +
-            `- Never shame or blame. Ask questions like "What's one small step you could try?" instead of "Stop wasting time."\n`) +
-        `- Keep it natural for text-to-speech (no emojis, no markdown, no special characters).\n` +
-        `- Match the intensity to the severity level.\n` +
-        `- Be unique and varied each time.`;
+         (isExplicitToughLove
+           ? `- If not, redirect them hard with aggressive humor (PG-13; no explicit profanity).\n` +
+             `- Internet slang is okay (bruh, lol, lmao). All-caps emphasis is allowed.\n` +
+             `- No slurs, hate, or threats. Don't insult the user's identity — roast the behavior/loop.\n`
+           : `- If not, gently redirect them toward their tasks with curiosity, not commands.\n` +
+             `- Never shame or blame. Ask questions like "What's one small step you could try?" instead of "Stop wasting time."\n`) +
+         `- Keep it natural for text-to-speech (no emojis, no markdown, no special characters).\n` +
+         `- Match the intensity to the severity level.\n` +
+         `- Be unique and varied each time.`;
 
       userPrompt = context.matchedTodo
         ? `The user is on task with "${context.matchedTodo}". Generate an encouraging message.`

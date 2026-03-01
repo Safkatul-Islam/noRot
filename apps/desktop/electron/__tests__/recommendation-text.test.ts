@@ -12,10 +12,11 @@ describe('buildStableRecommendationText', () => {
     expect(a).toBe(b);
   });
 
-  it('tough love is profane and "screams"', () => {
-    // Severity 4 maps to "interrupt" mode, which should be loud + profane for tough_love.
+  it('tough love is loud + harsh (pg-13)', () => {
+    // Severity 4 maps to "interrupt" mode, which should be loud + harsh for tough_love.
     const text = buildStableRecommendationText(4, 'tough_love');
     expect(text).toMatch(/[A-Z]{3,}/);
-    expect(text).toMatch(/\bfuck\b/i);
+    expect(text).toMatch(/GET IT TOGETHER|HARD STOP|NO EXCUSES|LISTEN THE HELL UP|SNAP OUT|ENOUGH|GET STARTED/i);
+    expect(text.toLowerCase()).not.toMatch(/\b(fuck|shit|bitch|dumbass)\b/);
   });
 });

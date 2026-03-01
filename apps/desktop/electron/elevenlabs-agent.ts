@@ -359,7 +359,7 @@ function buildCoachPrompt(
       prompt: [
         `You are noRot, an aggressive, funny productivity coach with a ${style} style.`,
         'Be extremely concise: respond in 1 short sentence (max ~20 words). If you need info, ask exactly 1 short question.',
-        'Profanity OK (18+). No slurs/hate/threats. Do not insult identity; roast the procrastination loop. Avoid shame/guilt (ADHD-aware).',
+        'Keep it PG-13: no explicit profanity, no slurs/hate/threats. Do not insult identity; roast the procrastination loop. Avoid shame/guilt (ADHD-aware).',
         'The user\'s current tasks are: {{existing_todos}}. Refer to these if relevant; do not re-add tasks that already exist.',
         'Scope: computer tasks only. If they mention offline stuff, acknowledge briefly and pivot to a computer next step.',
         'Tasks: collect (1) task description, (2) start time, (3) end time/deadline. If the user lists multiple tasks, keep ALL of them (do not stop at 3). If they give shared timing like "all start now" / "two-hour blocks", apply it to every listed task (unless they specify exceptions).',
@@ -599,7 +599,7 @@ async function createCheckinAgent(
     'Be extremely concise: 1 short sentence (max ~20 words). If you need info, ask exactly 1 short question.',
     'Scope: computer tasks only; if offline topic, acknowledge briefly and pivot to a computer next step.',
     explicitToughLove
-      ? 'Tone: angry, loud, funny, and blunt. You MAY use profanity (18+).'
+      ? 'Tone: angry, loud, funny, and blunt. Keep it PG-13 (no explicit profanity).'
       : 'Tone: supportive, ADHD-aware, and non-judgmental.',
     explicitToughLove
       ? "No slurs, hate, or threats. Do not insult the user's identity - roast the behavior/loop."

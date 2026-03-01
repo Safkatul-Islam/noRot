@@ -152,6 +152,38 @@ function focusScoreToSeverity(score: number): Severity {
   return 4 as Severity;
 }
 
+function sanitizeToughLoveText(input: string): string {
+  const raw = (input ?? '').toString();
+  if (!raw) return '';
+
+  const preserve = (matched: string, replacement: string): string => {
+    if (matched.toUpperCase() === matched) return replacement.toUpperCase();
+    const cap = matched[0] === matched[0]?.toUpperCase();
+    return cap ? replacement[0]!.toUpperCase() + replacement.slice(1) : replacement;
+  };
+
+  let t = raw;
+  // Phrase-level cleanups first
+  t = t.replace(/\bno\s+fucking\s+excuses\b/gi, (m) => preserve(m, 'no excuses'));
+  t = t.replace(/\bget\s+the\s+fuck\s+started\b/gi, (m) => preserve(m, 'get started'));
+  t = t.replace(/\bwhat\s+the\s+fuck\b/gi, (m) => preserve(m, 'what the hell'));
+  t = t.replace(/\blisten\s+the\s+fuck\s+up\b/gi, (m) => preserve(m, 'listen the hell up'));
+
+  // Word-level replacements
+  t = t.replace(/\bfucking\b/gi, (m) => preserve(m, 'seriously'));
+  t = t.replace(/\bfuck\b/gi, (m) => preserve(m, 'hell'));
+  t = t.replace(/\bshit\b/gi, (m) => preserve(m, 'mess'));
+  t = t.replace(/\bbitch\b/gi, (m) => preserve(m, 'jerk'));
+  t = t.replace(/\bdumbass\b/gi, (m) => preserve(m, 'dummy'));
+  t = t.replace(/\basshole\b/gi, (m) => preserve(m, 'jerk'));
+  t = t.replace(/\bbastard\b/gi, (m) => preserve(m, 'jerk'));
+  t = t.replace(/\bstupid\s+ass\b/gi, (m) => preserve(m, 'dumb'));
+
+  // Normalize whitespace
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+}
+
 function scoreToSeverity(score: number): Severity {
   const band = SEVERITY_BANDS.find((b) => score >= b.scoreMin && score <= b.scoreMax);
   return (band ? band.severity : 0) as Severity;
@@ -612,17 +644,21 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         );
       }
 
-      // Ensure explicit Tough Love always curses + "screams", even if Gemini returns something mild.
+      // Always sanitize Tough Love text to keep it PG-13 (Gemini or local variants).
+      if (scoreResult.recommendation.persona === 'tough_love' && interventionText) {
+        interventionText = sanitizeToughLoveText(interventionText);
+      }
+
+      // Ensure Tough Love stays loud + harsh, even if Gemini returns something mild.
       if (isExplicitToughLove && interventionText) {
-        const hasProfanity = /\b(fuck|bitch|bastard|idiot|dumbass|stupid ass)\b/i.test(interventionText);
+        const hasHarshMarker = /\b(BRUH|ENOUGH|HARD STOP|SNAP OUT|NOPE)\b/i.test(interventionText);
         const hasScream = /[A-Z]{3,}/.test(interventionText);
-        if (!hasProfanity || !hasScream) {
-          interventionText = `STOP. LISTEN THE FUCK UP. ${interventionText}`;
+        if (!hasHarshMarker || !hasScream) {
+          interventionText = `STOP. LISTEN THE HELL UP. ${interventionText}`;
         }
       }
 
-      // Make explicit Tough Love sound more "loud" for ElevenLabs by adjusting voice settings.
-      // If ElevenLabs rejects explicit content, renderer will fall back to local TTS.
+      // Make Tough Love sound more "loud" for ElevenLabs by adjusting voice settings.
       const audioTts = isExplicitToughLove
         ? {
             ...scoreResult.recommendation.tts,

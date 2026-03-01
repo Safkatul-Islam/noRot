@@ -127,24 +127,24 @@ const personaVariantMap: Record<Persona, PersonaVariants> = {
       () => `Crisis means simplify. One task. One step. Then reassess.`,
     ],
   },
-  // NOTE: Tough Love is explicit (18+) and intentionally intense + comedic.
-  // No slurs, no threats, no hate - just aggressive humor and directness.
+  // NOTE: Tough Love is intentionally intense + comedic.
+  // Keep it harsh but PG-13: no explicit profanity, no slurs, no threats, no hate.
   tough_love: {
     1: [
-      (t) => `BRUH. You're ${t}. WHAT THE FUCK were you actually about to work on?`,
+      (t) => `BRUH. You're ${t}. WHAT THE HELL were you actually about to work on?`,
       (t) => `Uh-huh. ${t}. Are we working... or are we cosplaying as "busy" again, lmao?`,
       (t) => `You're ${t}. Quick reality check: is this the plan, or is your brain freelancing again?`,
-      (t) => `Congrats, you're ${t}. Now be honest: what's the next real step you're dodging, idiot?`,
+      (t) => `Congrats, you're ${t}. Now be honest: what's the next real step you're dodging?`,
       (t) => `You're ${t}. I'm not mad - I'm disappointed. Kidding. I'm mad as hell. What's the task?`,
       (t) => `You're ${t}. Stop the squirrel mode and name ONE thing you're supposed to do, lol.`,
       (t) => `${t}. Right now. Seriously? Pick the smallest "get back on track" move.`,
       (t) => `You're ${t}. You have 10 seconds to pick the next step before I start screaming.`,
       (t) => `You're ${t}. That's not "research." That's procrastination with extra steps. What's next?`,
-      (t) => `Okay, you stubborn bastard. You're ${t}. What are we doing for real in the next 2 minutes?`,
+      (t) => `Okay, you stubborn gremlin. You're ${t}. What are we doing for real in the next 2 minutes?`,
     ],
     2: [
-      (t) => `You've been ${t} for a while. What's pulling you away - boredom, fear, or some stupid ass habit?`,
-      (t) => `Still ${t}? Cool. Pick ONE 5-minute step and do it. No more fucking around, bitch.`,
+      (t) => `You've been ${t} for a while. What's pulling you away - boredom, fear, or some dumb habit?`,
+      (t) => `Still ${t}? Cool. Pick ONE 5-minute step and do it. No more messing around.`,
       (t) => `You're ${t}. CLOSE IT and open the work. What's the next tiny deliverable?`,
       (t) => `You're ${t}. If you keep doing this, Future You is gonna be pissed. What's step one?`,
       (t) => `Okay, ${t} addiction acknowledged. Now: what's the task, and what's the first move?`,
@@ -155,7 +155,7 @@ const personaVariantMap: Record<Persona, PersonaVariants> = {
       (t) => `You're ${t}. Pick a micro-step you can do even if you feel like crap. Go.`,
     ],
     3: [
-      (t) => `You've been ${t} for a while now. ENOUGH. What is the tiniest thing you can finish right the fuck now?`,
+      (t) => `You've been ${t} for a while now. ENOUGH. What is the tiniest thing you can finish right now?`,
       (t) => `You're ${t}. I'm done being polite. Start the task - ugly, messy, whatever. What's step one?`,
       (t) => `Still ${t}? Okay. What are you avoiding: failure, boredom, or not knowing where to start?`,
       (t) => `You're ${t}. Stop "preparing" and do the damn thing. First action. GO.`,
@@ -163,7 +163,7 @@ const personaVariantMap: Record<Persona, PersonaVariants> = {
       (t) => `You're ${t}. If you open one more random tab, I will lose it. What's the next concrete step?`,
       (t) => `You're ${t}. I'm not asking for perfection - I'm asking for movement. What's the 2-minute start?`,
       (t) => `You're ${t}. Choose your weapon: outline, first sentence, first command. Which one?`,
-      (t) => `You're ${t}. Your brain is lying to you, dumbass. You can start badly. What's step one?`,
+      (t) => `You're ${t}. Your brain is lying to you. You can start badly. What's step one?`,
       (t) => `You're ${t}. Enough circling. Commit to 5 minutes and start with the easiest subtask.`,
     ],
     4: [
@@ -226,12 +226,12 @@ export function buildInterventionText(
     }
   }
 
-  // Enforce explicit + loud Tough Love style (18+ gated elsewhere).
+  // Enforce a loud Tough Love style.
   if (persona === 'tough_love') {
-    const hasProfanity = /\b(fuck|bitch|bastard|idiot|dumbass|stupid ass)\b/i.test(text);
+    const hasHarshMarker = /\b(BRUH|ENOUGH|HARD STOP|SNAP OUT|NOPE)\b/i.test(text);
     const hasScream = /[A-Z]{3,}/.test(text);
-    if (!hasProfanity || !hasScream) {
-      text = `STOP. LISTEN THE FUCK UP. ${text}`;
+    if (!hasHarshMarker || !hasScream) {
+      text = `STOP. LISTEN THE HELL UP. ${text}`;
     }
   }
 
