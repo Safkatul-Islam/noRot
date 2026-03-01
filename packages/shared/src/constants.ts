@@ -1,4 +1,4 @@
-import { Severity, Persona, InterventionMode } from './types';
+import { Severity, Persona, InterventionMode } from './types.js';
 
 export interface SeverityBand {
   severity: Severity;

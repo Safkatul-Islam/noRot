@@ -1,5 +1,5 @@
-import type { UsageSnapshot, Severity } from './types';
-import { SCORING_WEIGHTS, LATE_NIGHT_MULTIPLIER, SEVERITY_BANDS } from './constants';
+import type { UsageSnapshot, Severity } from './types.js';
+import { SCORING_WEIGHTS, LATE_NIGHT_MULTIPLIER, SEVERITY_BANDS } from './constants.js';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

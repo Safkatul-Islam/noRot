@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { FocusScoreEngine } from '../focus-score-engine'
+import { FocusScoreEngine } from '../focus-score-engine.js'
 
 describe('FocusScoreEngine', () => {
   test('decays while distracting and recovers while not distracting', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
-import type { UsageSnapshot } from '../types'
-import { applySnoozeEscalation, calculateScore, scoreToSeverity } from '../scoring'
+import type { UsageSnapshot } from '../types.js'
+import { applySnoozeEscalation, calculateScore, scoreToSeverity } from '../scoring.js'
 
 function makeSnapshot(overrides?: Partial<UsageSnapshot>): UsageSnapshot {
   const base: UsageSnapshot = {
