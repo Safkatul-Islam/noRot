@@ -11,6 +11,7 @@ describe('classifyApp', () => {
     expect(classifyApp('iTerm2', rules)).toBe('productive');
     expect(classifyApp('Xcode', rules)).toBe('productive');
     expect(classifyApp('Notion', rules)).toBe('productive');
+    expect(classifyApp('Finder', rules)).toBe('productive');
   });
 
   it('classifies known entertainment apps', () => {
@@ -18,25 +19,26 @@ describe('classifyApp', () => {
     expect(classifyApp('Reddit', rules)).toBe('entertainment');
     expect(classifyApp('YouTube', rules)).toBe('entertainment');
     expect(classifyApp('TikTok', rules)).toBe('entertainment');
-    expect(classifyApp('Instagram', rules)).toBe('entertainment');
+    // Instagram is treated as "social" (still unproductive in the UI).
+    expect(classifyApp('Instagram', rules)).toBe('social');
   });
 
   it('classifies known social apps', () => {
-    expect(classifyApp('Slack', rules)).toBe('social');
+    expect(classifyApp('Slack', rules)).toBe('productive');
     expect(classifyApp('Discord', rules)).toBe('social');
     expect(classifyApp('Messages', rules)).toBe('social');
   });
 
   it('returns neutral for unknown apps', () => {
-    expect(classifyApp('Calculator', rules)).toBe('neutral');
-    expect(classifyApp('Finder', rules)).toBe('neutral');
-    expect(classifyApp('Preview', rules)).toBe('neutral');
+    // Unknown apps default to productive; neutral is reserved for explicitly-marked 50/50 apps.
+    expect(classifyApp('Calculator', rules)).toBe('productive');
+    expect(classifyApp('Preview', rules)).toBe('productive');
   });
 
   it('is case-insensitive', () => {
     expect(classifyApp('code', rules)).toBe('productive');
     expect(classifyApp('REDDIT', rules)).toBe('entertainment');
-    expect(classifyApp('sLaCk', rules)).toBe('social');
+    expect(classifyApp('sLaCk', rules)).toBe('productive');
   });
 
   it('uses first-match-wins ordering', () => {
@@ -51,11 +53,11 @@ describe('classifyApp', () => {
     const titleRules = [
       { id: '1', matchType: 'title' as const, pattern: 'Code', category: 'productive' as const },
     ];
-    expect(classifyApp('Code', titleRules)).toBe('neutral');
+    expect(classifyApp('Code', titleRules)).toBe('productive');
   });
 
   it('matches substring patterns', () => {
     expect(classifyApp('Visual Studio Code', rules)).toBe('productive');
-    expect(classifyApp('Google Chrome - Reddit', rules)).toBe('entertainment');
+    expect(classifyApp('Google Chrome', rules, 'Home | Reddit | Google Chrome')).toBe('entertainment');
   });
 });

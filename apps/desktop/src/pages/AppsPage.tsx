@@ -257,7 +257,7 @@ export function AppsPage() {
                     ? (activityStatus.visionMessage ?? 'Scanning this app window to classify it…')
                     : activityStatus.activitySource === 'vision'
                       ? `Classified as ${activeUiCategory}.`
-                      : (activityStatus.visionMessage ?? 'No scanning needed right now.')}
+                      : (activityStatus.visionMessage ?? 'Already classified.')}
             </p>
           </div>
         </div>

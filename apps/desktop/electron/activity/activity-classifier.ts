@@ -3,6 +3,7 @@ import path from 'path';
 import type { CategoryRule } from '../types';
 import { classifyApp, extractDomain, isBrowser } from '../window-classifier';
 import type { RawImage } from '@xenova/transformers';
+import { analyzeVisionOutputs, voteVisionDecisions, VISION_LABELS } from './vision-decision';
 
 type ActivityCategory = 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
 
@@ -30,6 +31,8 @@ export type ActivityClassification = {
   activitySource?: 'rules' | 'vision';
 };
 
+export type VisionProgress = { attempt: number; total: number };
+
 type ActiveWindowContext = {
   appName: string;
   windowTitle?: string;
@@ -39,24 +42,7 @@ type ActiveWindowContext = {
 
 const VISION_MODEL_ID = 'Xenova/clip-vit-base-patch32';
 const VISION_THROTTLE_MS = 10_000;
-const MIN_VISION_CONFIDENCE = 0.35;
-
-const CANDIDATE_LABELS: Array<{ label: string; kind: ActivityKind; category: ActivityCategory }> = [
-  { label: 'writing code in an IDE', kind: 'coding', category: 'productive' },
-  { label: 'debugging code', kind: 'coding', category: 'productive' },
-  { label: 'working in a spreadsheet', kind: 'spreadsheets', category: 'productive' },
-  { label: 'editing a presentation slide', kind: 'presentations', category: 'productive' },
-  { label: 'writing a document', kind: 'writing', category: 'productive' },
-  { label: 'reading technical documentation', kind: 'docs', category: 'productive' },
-  { label: 'checking email', kind: 'email', category: 'productive' },
-  { label: 'chatting in a messaging app', kind: 'chat', category: 'social' },
-  { label: 'scrolling social media', kind: 'social_feed', category: 'social' },
-  { label: 'watching an online video', kind: 'video', category: 'entertainment' },
-  { label: 'shopping online', kind: 'shopping', category: 'entertainment' },
-  { label: 'playing a video game', kind: 'games', category: 'entertainment' },
-  { label: 'using system settings', kind: 'settings', category: 'productive' },
-  { label: 'browsing files in a file manager', kind: 'file_manager', category: 'productive' },
-];
+const MIN_VISION_CONFIDENCE = 0.18; // used only as an early-stop heuristic for voting runs
 
 function brandFromDomain(domain: string): string | null {
   const d = domain.toLowerCase();
@@ -257,7 +243,12 @@ export function createActivityClassifier() {
     async classify(
       ctx: ActiveWindowContext,
       categoryRules: CategoryRule[],
-      visionEnabled: boolean
+      visionEnabled: boolean,
+      opts?: {
+        attempts?: number;
+        attemptDelayMs?: number;
+        onProgress?: (p: VisionProgress) => void;
+      }
     ): Promise<ActivityClassification> {
       const baseCategory = classifyApp(ctx.appName, categoryRules, ctx.windowTitle, ctx.windowUrl);
       const baseDomain = isBrowser(ctx.appName) ? extractDomain(ctx.windowUrl, ctx.windowTitle) : undefined;
@@ -277,9 +268,9 @@ export function createActivityClassifier() {
 
       if (!visionEnabled) return base;
 
-      // Only use CV when the app/domain is genuinely ambiguous (neutral in rules).
-      // This matches the UX spec: 50/50 apps start neutral, and vision decides per screenshot.
-      if (baseCategory !== 'neutral') return base;
+      // Don't spend vision cycles on clearly-productive apps by rules.
+      // Vision is used to continuously re-check neutral/unproductive contexts (e.g., browser content).
+      if (baseCategory === 'productive') return base;
 
       if (process.platform === 'darwin') {
         const status = systemPreferences.getMediaAccessStatus('screen');
@@ -293,33 +284,59 @@ export function createActivityClassifier() {
         return lastResult;
       }
 
-      const png = await captureActiveWindowPng(ctx);
-      if (!png) return base;
-
       try {
         const { classifier, RawImage: RawImageClass } = await getVisionPipeline();
-        const pngArrayBuffer = Uint8Array.from(png).buffer;
-        const image = await RawImageClass.fromBlob(new Blob([pngArrayBuffer], { type: 'image/png' }));
-        const labels = CANDIDATE_LABELS.map((c) => c.label);
-        const output = await classifier(image, labels, {
-          hypothesis_template: 'This is a screenshot of someone {}.',
-        });
+        const attempts = Math.max(1, Math.min(5, Math.floor(opts?.attempts ?? 3)));
+        const attemptDelayMs = Math.max(0, Math.min(10_000, Math.floor(opts?.attemptDelayMs ?? 1500)));
 
-        const top = output?.[0];
-        if (!top || typeof top.label !== 'string' || typeof top.score !== 'number') return base;
-        if (!Number.isFinite(top.score) || top.score < MIN_VISION_CONFIDENCE) return base;
+        const labels = VISION_LABELS.map((c) => c.label);
+        const attemptDecisions: Array<ReturnType<typeof analyzeVisionOutputs>> = [];
 
-        const mapped = CANDIDATE_LABELS.find((c) => c.label === top.label);
+        for (let i = 0; i < attempts; i++) {
+          opts?.onProgress?.({ attempt: i + 1, total: attempts });
+
+          const png = await captureActiveWindowPng(ctx);
+          if (!png) {
+            if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+            continue;
+          }
+
+          // Best-effort privacy: avoid extra copies and wipe bytes after decoding.
+          const pngBytes = new Uint8Array(png.buffer, png.byteOffset, png.byteLength);
+          const image = await RawImageClass.fromBlob(new Blob([pngBytes], { type: 'image/png' }));
+          try { pngBytes.fill(0); } catch { /* ignore */ }
+
+          const output = await classifier(image, labels, {
+            hypothesis_template: 'This is a screenshot of someone {}.',
+          });
+
+          if (!output || output.length === 0) {
+            if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+            continue;
+          }
+
+          const decision = analyzeVisionOutputs(output);
+          attemptDecisions.push(decision);
+
+          // Early stop if we already have a confident decision.
+          if (decision.decidedCategory && decision.confidence >= MIN_VISION_CONFIDENCE) break;
+
+          if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+        }
+
+        const voted = voteVisionDecisions(attemptDecisions);
+        if (!voted.decidedCategory) return base;
+
         const result: ActivityClassification = {
-          category: mapped?.category ?? baseCategory,
-          activityLabel: mapped ? top.label : undefined,
-          activityKind: mapped?.kind ?? 'unknown',
-          activityConfidence: top.score,
+          category: voted.decidedCategory,
+          activityLabel: voted.topLabel ?? base.activityLabel,
+          activityKind: voted.decidedKind ?? 'unknown',
+          activityConfidence: voted.confidence,
           activitySource: 'vision',
         };
 
         lastKey = key;
-        lastAt = now;
+        lastAt = Date.now();
         lastResult = result;
         return result;
       } catch (err) {
