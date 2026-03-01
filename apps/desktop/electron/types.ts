@@ -9,7 +9,6 @@ export const IPC_CHANNELS = {
   RESPOND_TO_INTERVENTION: 'intervention:respond',
   ON_INTERVENTION: 'intervention:new',
   ON_INTERVENTION_DISMISS: 'intervention:auto-dismiss',
-  GET_HISTORY: 'history:get',
   GET_USAGE_HISTORY: 'usage:get',
   GET_APP_STATS: 'apps:stats',
   GET_SETTINGS: 'settings:get',
@@ -29,21 +28,41 @@ export const IPC_CHANNELS = {
   ON_CHAT_ERROR: 'chat:error',
 
   // Todos
+  EXTRACT_TODOS: 'todos:extract',
   GET_TODOS: 'todos:get',
   ADD_TODO: 'todos:add',
   TOGGLE_TODO: 'todos:toggle',
   DELETE_TODO: 'todos:delete',
+  UPDATE_TODO: 'todos:update',
   REORDER_TODOS: 'todos:reorder',
   SET_TODOS: 'todos:set',
+  APPEND_TODOS: 'todos:append',
   ON_TODOS_UPDATED: 'todos:updated',
 
   // Todo overlay window
   OPEN_TODO_OVERLAY: 'todo-overlay:open',
   CLOSE_TODO_OVERLAY: 'todo-overlay:close',
+  IS_TODO_OVERLAY_OPEN: 'todo-overlay:is-open',
 
-  // Voice status broadcast (for overlay VoiceOrb)
+  // Voice status broadcast (for todo overlay VoiceOrb)
   BROADCAST_VOICE_STATUS: 'voice:broadcast-status',
   ON_VOICE_STATUS: 'voice:status-update',
+
+  // App focus tracking
+  ON_APP_FOCUS_CHANGED: 'app:focus-changed',
+
+  // Voice agent
+  ENSURE_VOICE_AGENT: 'agent:ensure',
+  ENSURE_CHECKIN_AGENT: 'agent:ensure-checkin',
+
+  // Voice chat (todo overlay orb → main window)
+  VOICE_CHAT_OPEN: 'voice:chat-open',
+  ON_VOICE_CHAT_OPEN: 'voice:on-chat-open',
+  HAS_ELEVENLABS_KEY: 'settings:has-elevenlabs-key',
+  ELEVENLABS_TTS: 'tts:elevenlabs',
+
+  // Wins tracker
+  GET_WINS: 'wins:get',
 } as const;
 
 export interface CategoryRule {
@@ -55,6 +74,8 @@ export interface CategoryRule {
 
 export interface UserSettings {
   persona: 'calm_friend' | 'coach' | 'tough_love';
+  /** If false, `tough_love` persona cannot be selected (explicit language). */
+  toughLoveExplicitAllowed: boolean;
   scoreThreshold: number;
   cooldownSeconds: number;
   apiUrl: string;
@@ -68,19 +89,38 @@ export interface UserSettings {
   hasCompletedOnboarding: boolean;
   userName: string;
   autoShowTodoOverlay: boolean;
+  timeFormat: '12h' | '24h';
+  /** Time zone for displaying/comparing todo times. Use 'system' to follow OS time zone. */
+  timeZone: string;
+  lastDailySetupDate: string;
+  elevenLabsAgentId: string;
+  elevenLabsAgentPersona: string;
+  elevenLabsAgentVersion: number;
+  monitoringEnabled: boolean;
 }
 
 export const KNOWN_BROWSERS = [
   'Google Chrome',
   'Chrome',
+  'chrome.exe',
   'Safari',
   'Firefox',
+  'firefox.exe',
   'Arc',
+  'arc.exe',
   'Microsoft Edge',
+  'Edge',
+  'msedge',
+  'msedge.exe',
   'Brave Browser',
+  'Brave',
+  'brave.exe',
   'Opera',
+  'opera.exe',
   'Vivaldi',
+  'vivaldi.exe',
   'Chromium',
+  'chromium.exe',
 ];
 
 export const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
@@ -116,6 +156,7 @@ export const DEFAULT_CATEGORY_RULES: CategoryRule[] = [
 
 export const DEFAULT_SETTINGS: UserSettings = {
   persona: 'calm_friend',
+  toughLoveExplicitAllowed: false,
   scoreThreshold: 25,
   cooldownSeconds: 180,
   apiUrl: 'http://127.0.0.1:8000',
@@ -128,5 +169,12 @@ export const DEFAULT_SETTINGS: UserSettings = {
   categoryRules: DEFAULT_CATEGORY_RULES,
   hasCompletedOnboarding: false,
   userName: '',
-  autoShowTodoOverlay: false,
+  autoShowTodoOverlay: true,
+  timeFormat: '12h',
+  timeZone: 'system',
+  lastDailySetupDate: '',
+  elevenLabsAgentId: '',
+  elevenLabsAgentPersona: '',
+  elevenLabsAgentVersion: 0,
+  monitoringEnabled: true,
 };

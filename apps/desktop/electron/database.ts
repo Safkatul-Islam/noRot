@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
 import { app } from 'electron';
 import path from 'path';
-import type { ScoreResponse, InterventionEvent, TodoItem } from '@norot/shared';
+import type { ScoreResponse, InterventionEvent, TodoItem, WinsData } from '@norot/shared';
 import { DEFAULT_SETTINGS, DEFAULT_CATEGORY_RULES, type UserSettings } from './types';
+import { buildUpdateTodoSql, type TodoUpdateFields } from './todo-update';
 
 let db: Database.Database;
 
@@ -53,9 +54,25 @@ export function initDatabase(): void {
     );
   `);
 
-  // Migrate: add app and url columns to todos table
-  try { db.exec('ALTER TABLE todos ADD COLUMN app TEXT'); } catch { /* already exists */ }
-  try { db.exec('ALTER TABLE todos ADD COLUMN url TEXT'); } catch { /* already exists */ }
+  // Migrate: add extra columns to todos table
+  const migrateColumns = [
+    'app TEXT',
+    'url TEXT',
+    'allowed_apps TEXT',
+    'deadline TEXT',
+    'start_time TEXT',
+    'duration_minutes INTEGER',
+  ];
+  for (const col of migrateColumns) {
+    try {
+      db.exec(`ALTER TABLE todos ADD COLUMN ${col}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('duplicate column')) {
+        console.error(`[database] Migration failed for column ${col}:`, msg);
+      }
+    }
+  }
 
   // Seed default settings if they don't exist
   const insertSetting = db.prepare(
@@ -106,6 +123,22 @@ export function insertSnapshot(timestamp: string, data: string): void {
     timestamp,
     data
   );
+}
+
+export function getLatestSnapshot(): { activeApp: string; activeDomain?: string } | null {
+  const row = db.prepare(
+    'SELECT data FROM telemetry_snapshots ORDER BY id DESC LIMIT 1'
+  ).get() as { data: string } | undefined;
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.data);
+    return {
+      activeApp: parsed?.categories?.activeApp ?? 'unknown',
+      activeDomain: parsed?.categories?.activeDomain,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function getUsageHistory(minutes: number = 60): Array<{
@@ -163,6 +196,7 @@ export function getUsageHistory(minutes: number = 60): Array<{
 
 export function getAppStats(minutes: number = 1440): Array<{
   appName: string;
+  domain?: string;
   category: string;
   totalSeconds: number;
   lastSeen: string;
@@ -174,7 +208,7 @@ export function getAppStats(minutes: number = 1440): Array<{
     )
     .all(cutoff) as Array<{ timestamp: string; data: string }>;
 
-  const apps = new Map<string, { category: string; totalSeconds: number; lastSeen: string }>();
+  const apps = new Map<string, { appName: string; domain?: string; category: string; totalSeconds: number; lastSeen: string }>();
 
   for (const row of rows) {
     try {
@@ -184,23 +218,28 @@ export function getAppStats(minutes: number = 1440): Array<{
       const activeDomain = snapshot?.categories?.activeDomain;
       if (typeof rawAppName !== 'string' || !rawAppName) continue;
 
-      // Use "AppName (domain)" as key when a domain is present
-      const appName = activeDomain ? `${rawAppName} (${activeDomain})` : rawAppName;
+      // Key per (app, domain) so "Chrome + YouTube" and "Chrome + GitHub" can be tuned separately.
+      const key = `${rawAppName}||${activeDomain ?? ''}`;
       const ts = typeof snapshot?.timestamp === 'string' ? snapshot.timestamp : row.timestamp;
-      const existing = apps.get(appName);
+      const existing = apps.get(key);
       if (existing) {
         existing.totalSeconds += 5;
         existing.lastSeen = ts;
       } else {
-        apps.set(appName, { category: category ?? 'neutral', totalSeconds: 5, lastSeen: ts });
+        apps.set(key, {
+          appName: rawAppName,
+          ...(typeof activeDomain === 'string' && activeDomain ? { domain: activeDomain } : {}),
+          category: category ?? 'neutral',
+          totalSeconds: 5,
+          lastSeen: ts,
+        });
       }
     } catch {
       // Ignore malformed rows
     }
   }
 
-  return Array.from(apps.entries())
-    .map(([appName, stats]) => ({ appName, ...stats }))
+  return Array.from(apps.values())
     .sort((a, b) => b.totalSeconds - a.totalSeconds);
 }
 
@@ -314,6 +353,12 @@ export function getSettings(): UserSettings {
       (settings as Record<string, unknown>)[row.key] = JSON.parse(row.value);
     }
   }
+
+  // Safety gate: never allow explicit Tough Love persona unless user opted in.
+  if (settings.persona === 'tough_love' && settings.toughLoveExplicitAllowed !== true) {
+    settings.persona = 'coach';
+  }
+
   return settings;
 }
 
@@ -328,8 +373,8 @@ export function updateSetting(key: string, value: unknown): void {
 
 export function getTodos(): TodoItem[] {
   const rows = db
-    .prepare('SELECT id, text, done, "order", app, url FROM todos ORDER BY "order" ASC')
-    .all() as Array<{ id: string; text: string; done: number; order: number; app: string | null; url: string | null }>;
+    .prepare('SELECT id, text, done, "order", app, url, allowed_apps, deadline, start_time, duration_minutes FROM todos ORDER BY "order" ASC')
+    .all() as Array<{ id: string; text: string; done: number; order: number; app: string | null; url: string | null; allowed_apps: string | null; deadline: string | null; start_time: string | null; duration_minutes: number | null }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -338,13 +383,28 @@ export function getTodos(): TodoItem[] {
     order: row.order,
     ...(row.app != null ? { app: row.app } : {}),
     ...(row.url != null ? { url: row.url } : {}),
+    ...(row.allowed_apps ? { allowedApps: JSON.parse(row.allowed_apps) } : {}),
+    ...(row.deadline != null ? { deadline: row.deadline } : {}),
+    ...(row.start_time != null ? { startTime: row.start_time } : {}),
+    ...(row.duration_minutes != null ? { durationMinutes: row.duration_minutes } : {}),
   }));
 }
 
 export function addTodo(item: TodoItem): void {
   db.prepare(
-    'INSERT INTO todos (id, text, done, "order", app, url) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(item.id, item.text, item.done ? 1 : 0, item.order, item.app ?? null, item.url ?? null);
+    'INSERT INTO todos (id, text, done, "order", app, url, allowed_apps, deadline, start_time, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    item.id,
+    item.text,
+    item.done ? 1 : 0,
+    item.order,
+    item.app ?? null,
+    item.url ?? null,
+    item.allowedApps ? JSON.stringify(item.allowedApps) : null,
+    item.deadline ?? null,
+    item.startTime ?? null,
+    item.durationMinutes ?? null
+  );
 }
 
 export function toggleTodo(id: string): void {
@@ -357,22 +417,104 @@ export function deleteTodo(id: string): void {
   db.prepare('DELETE FROM todos WHERE id = ?').run(id);
 }
 
+export function updateTodo(id: string, fields: TodoUpdateFields): void {
+  const built = buildUpdateTodoSql(fields);
+  if (!built) return;
+  db.prepare(`UPDATE todos SET ${built.setSql} WHERE id = ?`).run(...built.values, id);
+}
+
 export function reorderTodo(id: string, newOrder: number): void {
   db.prepare('UPDATE todos SET "order" = ? WHERE id = ?').run(newOrder, id);
+}
+
+export function appendTodos(items: TodoItem[]): void {
+  if (items.length === 0) return;
+
+  const row = db.prepare('SELECT COALESCE(MAX("order"), -1) AS maxOrder FROM todos').get() as { maxOrder: number };
+  const startOrder = (typeof row?.maxOrder === 'number' ? row.maxOrder : -1) + 1;
+
+  const insert = db.prepare(
+    'INSERT OR REPLACE INTO todos (id, text, done, "order", app, url, allowed_apps, deadline, start_time, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  const doAppend = db.transaction((todos: TodoItem[]) => {
+    for (let i = 0; i < todos.length; i++) {
+      const item = todos[i];
+      insert.run(
+        item.id,
+        item.text,
+        item.done ? 1 : 0,
+        startOrder + i,
+        item.app ?? null,
+        item.url ?? null,
+        item.allowedApps ? JSON.stringify(item.allowedApps) : null,
+        item.deadline ?? null,
+        item.startTime ?? null,
+        item.durationMinutes ?? null
+      );
+    }
+  });
+  doAppend(items);
 }
 
 export function setTodos(items: TodoItem[]): void {
   const clear = db.prepare('DELETE FROM todos');
   const insert = db.prepare(
-    'INSERT INTO todos (id, text, done, "order", app, url) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO todos (id, text, done, "order", app, url, allowed_apps, deadline, start_time, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const replaceAll = db.transaction((todos: TodoItem[]) => {
     clear.run();
     for (const item of todos) {
-      insert.run(item.id, item.text, item.done ? 1 : 0, item.order, item.app ?? null, item.url ?? null);
+      insert.run(
+        item.id,
+        item.text,
+        item.done ? 1 : 0,
+        item.order,
+        item.app ?? null,
+        item.url ?? null,
+        item.allowedApps ? JSON.stringify(item.allowedApps) : null,
+        item.deadline ?? null,
+        item.startTime ?? null,
+        item.durationMinutes ?? null
+      );
     }
   });
   replaceAll(items);
+}
+
+// --- Wins ---
+
+export function getWinsData(): WinsData {
+  // Refocuses today: count interventions where user clicked "I'm working!" today
+  const todayMidnight = new Date();
+  todayMidnight.setHours(0, 0, 0, 0);
+  const cutoff = todayMidnight.toISOString();
+
+  const refocusRow = db.prepare(
+    "SELECT COUNT(*) as count FROM interventions WHERE user_response = 'working' AND timestamp >= ?"
+  ).get(cutoff) as { count: number };
+
+  // Total focused minutes: parse the latest telemetry snapshot
+  const latestSnapshot = db.prepare(
+    'SELECT data FROM telemetry_snapshots ORDER BY id DESC LIMIT 1'
+  ).get() as { data: string } | undefined;
+
+  let totalFocusedMinutes = 0;
+  if (latestSnapshot) {
+    try {
+      const parsed = JSON.parse(latestSnapshot.data);
+      const productive = Number(parsed?.signals?.productiveMinutes);
+      if (Number.isFinite(productive)) {
+        totalFocusedMinutes = Math.round(productive);
+      }
+    } catch {
+      // Ignore malformed snapshot
+    }
+  }
+
+  return {
+    refocusCount: refocusRow.count,
+    totalFocusedMinutes,
+  };
 }
 
 export function closeDatabase(): void {

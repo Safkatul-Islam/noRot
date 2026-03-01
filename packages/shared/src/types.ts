@@ -36,6 +36,8 @@ export interface UsageCategories {
     | 'file_manager';
   activityConfidence?: number;
   activitySource?: 'rules' | 'vision';
+  contextTodo?: string;
+  contextOverride?: boolean;
 }
 
 export interface UsageSnapshot {
@@ -93,4 +95,13 @@ export interface TodoItem {
   order: number;
   app?: string;   // e.g. "VS Code", "Chrome"
   url?: string;   // e.g. "github.com"
+  allowedApps?: string[];
+  deadline?: string; // time string e.g. "15:00"
+  startTime?: string; // time string e.g. "14:00"
+  durationMinutes?: number;
+}
+
+export interface WinsData {
+  refocusCount: number;
+  totalFocusedMinutes: number;
 }
