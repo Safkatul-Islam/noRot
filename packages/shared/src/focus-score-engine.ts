@@ -3,12 +3,12 @@ import type { UsageCategories } from './types.js';
 // --- Level-based Focus Score Engine ---
 // 5 discrete levels: 0 = "Locked In" (best), 4 = "Cooked" (worst)
 // Distraction: drops one level every 5 seconds
-// Recovery: recovers one level every 2 seconds of productive use
+// Recovery: recovers one level every 5 seconds of productive use
 // Neutral: pauses recovery timer without resetting it
 
 const LEVEL_TO_SCORE = [100, 75, 50, 25, 0] as const;
 const STEP_INTERVAL_MS = 5_000; // 5 seconds per distraction level
-const RECOVERY_STEP_INTERVAL_MS = 2_000; // 2 seconds per recovery level
+const RECOVERY_STEP_INTERVAL_MS = 5_000; // 5 seconds per recovery level
 const MAX_LEVEL = 4;
 
 export interface FocusScoreTickInput {

@@ -32,7 +32,7 @@ describe('FocusScoreEngine', () => {
     expect(engine.getFocusScore()).toBe(0);
   });
 
-  it('recovers one level every 2 seconds of productive use', () => {
+  it('recovers one level every 5 seconds of productive use', () => {
     const engine = new FocusScoreEngine();
 
     // Tank the score to level 4 (score 0)
@@ -41,26 +41,26 @@ describe('FocusScoreEngine', () => {
     }
     expect(engine.getFocusScore()).toBe(0);
 
-    // 2 seconds → level 3 (score 25)
-    for (let i = 0; i < 2; i++) {
+    // 5 seconds → level 3 (score 25)
+    for (let i = 0; i < 5; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(25);
 
-    // 2 more seconds → level 2 (score 50)
-    for (let i = 0; i < 2; i++) {
+    // 5 more seconds → level 2 (score 50)
+    for (let i = 0; i < 5; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(50);
 
-    // 2 more seconds → level 1 (score 75)
-    for (let i = 0; i < 2; i++) {
+    // 5 more seconds → level 1 (score 75)
+    for (let i = 0; i < 5; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(75);
 
-    // 2 more seconds → level 0 (score 100, Locked In)
-    for (let i = 0; i < 2; i++) {
+    // 5 more seconds → level 0 (score 100, Locked In)
+    for (let i = 0; i < 5; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(100);

@@ -7,7 +7,7 @@ import { FocusScoreEngine } from '../focus-score-engine.js'
  */
 function simulate(
   engine: FocusScoreEngine,
-  category: string,
+  category: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown',
   durationSec: number,
   opts?: { tickMs?: number },
 ): number {
@@ -58,35 +58,35 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     expect(score).toBe(0)
   })
 
-  test('focused use recovers one level every 2 seconds', () => {
+  test('focused use recovers one level every 5 seconds', () => {
     const engine = new FocusScoreEngine()
 
     // Get distracted for 15 seconds → level 3 (score 25)
     simulate(engine, 'social', 15)
     expect(engine.getFocusScore()).toBe(25)
 
-    // 2 seconds of productive work → level 2 (score 50)
-    const after2 = simulate(engine, 'productive', 2)
-    expect(after2).toBe(50)
+    // 5 seconds of productive work → level 2 (score 50)
+    const after5 = simulate(engine, 'productive', 5)
+    expect(after5).toBe(50)
 
-    // 2 more seconds → level 1 (score 75)
-    const after4 = simulate(engine, 'productive', 2)
-    expect(after4).toBe(75)
+    // 5 more seconds → level 1 (score 75)
+    const after10 = simulate(engine, 'productive', 5)
+    expect(after10).toBe(75)
 
-    // 2 more seconds → level 0 (score 100, Locked In)
-    const after6 = simulate(engine, 'productive', 2)
-    expect(after6).toBe(100)
+    // 5 more seconds → level 0 (score 100, Locked In)
+    const after15 = simulate(engine, 'productive', 5)
+    expect(after15).toBe(100)
   })
 
-  test('less than 2 seconds of productive use does not recover a level', () => {
+  test('less than 5 seconds of productive use does not recover a level', () => {
     const engine = new FocusScoreEngine()
 
     // Get distracted → level 2 (score 50)
     simulate(engine, 'social', 10)
     expect(engine.getFocusScore()).toBe(50)
 
-    // Only 1 second of productive use — not enough to recover a level
-    const score = simulate(engine, 'productive', 1)
+    // Only 4 seconds of productive use — not enough to recover a level
+    const score = simulate(engine, 'productive', 4)
     expect(score).toBe(50)
   })
 
@@ -109,16 +109,16 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     simulate(engine, 'social', 15)
     expect(engine.getFocusScore()).toBe(25)
 
-    // 1 second of productive work (not enough for a full level — need 2s)
-    simulate(engine, 'productive', 1)
+    // 2 seconds of productive work (not enough for a full level — need 5s)
+    simulate(engine, 'productive', 2)
     expect(engine.getFocusScore()).toBe(25)
 
     // Switch to neutral (e.g. Finder) — pauses but doesn't reset banked time
     simulate(engine, 'neutral', 3)
     expect(engine.getFocusScore()).toBe(25)
 
-    // 1 more second of productive work — banked 1 + 1 = 2s → recover one level
-    const score = simulate(engine, 'productive', 1)
+    // 3 more seconds of productive work — banked 2 + 3 = 5s → recover one level
+    const score = simulate(engine, 'productive', 3)
     expect(score).toBe(50) // level 2
   })
 
@@ -129,20 +129,20 @@ describe('FocusScoreEngine — simple level-based timer', () => {
     simulate(engine, 'social', 15)
     expect(engine.getFocusScore()).toBe(25)
 
-    // 1 second of productive work (banked some recovery time, but not enough for a level)
-    simulate(engine, 'productive', 1)
+    // 4 seconds of productive work (banked some recovery time, but not enough for a level)
+    simulate(engine, 'productive', 4)
     expect(engine.getFocusScore()).toBe(25)
 
     // Switch to distracted app — wipes all recovery progress
     simulate(engine, 'social', 1)
     expect(engine.getFocusScore()).toBe(25)
 
-    // Now need a full 2 seconds of productive work to recover one level (banked time is gone)
-    simulate(engine, 'productive', 1)
+    // Now need a full 5 seconds of productive work to recover one level (banked time is gone)
+    simulate(engine, 'productive', 4)
     expect(engine.getFocusScore()).toBe(25) // not enough yet
 
     const score = simulate(engine, 'productive', 1)
-    expect(score).toBe(50) // now 2s total → recovered one level
+    expect(score).toBe(50) // now 5s total → recovered one level
   })
 
   test('switching from distracted to neutral to distracted resets timer', () => {

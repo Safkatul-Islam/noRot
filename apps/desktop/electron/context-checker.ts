@@ -1,6 +1,7 @@
 import { Type } from '@google/genai';
 import type { TodoItem } from '@norot/shared';
 import { getClient } from './gemini-client';
+import { isBrowser } from './window-classifier';
 
 export interface ContextResult {
   isRelevant: boolean;
@@ -60,13 +61,42 @@ export async function checkContextRelevance(
   );
   if (todosWithApps.length === 0) return null;
 
-  // 2. Check if any todo's allowedApps match current app or domain
+  // 2. Check if any todo's allowedApps match current app or domain.
+  // For browsers (Chrome/Safari/etc), only match by domain.
+  // Otherwise any todo that allows "Chrome" would match *every* website and
+  // cause false "relevant" results (e.g. Instagram being treated as work).
   const lowerApp = appName.toLowerCase();
   const lowerDomain = (domain ?? '').toLowerCase();
 
+  const browser = isBrowser(appName);
+  if (browser && !lowerDomain) return null;
+
+  const GENERIC_BROWSER_ALLOWED = new Set([
+    'chrome',
+    'google chrome',
+    'safari',
+    'firefox',
+    'arc',
+    'edge',
+    'microsoft edge',
+    'brave',
+    'brave browser',
+    'opera',
+    'vivaldi',
+    'chromium',
+    'browser',
+  ]);
+
   const matched = todosWithApps.find((t) =>
     t.allowedApps!.some((allowed) => {
-      const lowerAllowed = allowed.toLowerCase();
+      const lowerAllowed = allowed.toLowerCase().trim();
+      if (!lowerAllowed) return false;
+
+      if (browser) {
+        if (GENERIC_BROWSER_ALLOWED.has(lowerAllowed)) return false;
+        return lowerDomain.includes(lowerAllowed);
+      }
+
       return lowerApp.includes(lowerAllowed) || (lowerDomain && lowerDomain.includes(lowerAllowed));
     })
   );
@@ -90,8 +120,8 @@ export async function checkContextRelevance(
     const systemInstruction =
       `The user has these tasks:\n${todoList}\n\n` +
       `They are currently using "${appName}" viewing "${windowTitle ?? ''}" on "${domain ?? 'unknown'}". ` +
-      'Is this activity relevant to any of their tasks? ' +
-      'Be generous -- if it could plausibly help with a task, say yes.';
+      'Is this activity relevant to completing any of their tasks? ' +
+      'Be strict: only say yes when it is clearly tied to a specific task. If unsure, say no.';
 
     const response = await client.models.generateContent({
       model: 'gemini-2.5-flash',

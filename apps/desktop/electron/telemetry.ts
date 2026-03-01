@@ -320,7 +320,10 @@ export function createTelemetryCollector(
         });
     }
 
-    // Non-blocking context check: when distracting, check if relevant to a todo
+    // Non-blocking context check: when distracting, check if relevant to a todo.
+    // IMPORTANT: this should NOT change the category used for scoring.
+    // (Otherwise the focus score can "bounce" back up while the user is still
+    // on a distracting site like Instagram.)
     if (category === 'entertainment' || category === 'social') {
       const apiKey = getGeminiApiKey();
       const todos = getActiveTodos();
@@ -340,10 +343,6 @@ export function createTelemetryCollector(
         }
       }
 
-      // Only apply override if the cached result matches the CURRENT activity
-      if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
-        category = 'productive';
-      }
     } else {
       // Clear context result when user switches to non-distracting app
       lastContextResult = null;
@@ -450,8 +449,12 @@ export function createTelemetryCollector(
           visionEnabled
         );
 
-      const contextOverride = lastContextResult?.isRelevant === true;
-      const contextTodo = contextOverride ? (lastContextResult?.matchedTodoText ?? undefined) : undefined;
+      const contextOverride =
+        lastContextResult?.isRelevant === true &&
+        lastContextResultKey === activityKey;
+      const contextTodo = contextOverride
+        ? (lastContextResult?.matchedTodoText ?? undefined)
+        : undefined;
 
       const snapshot: UsageSnapshot = {
         timestamp: new Date().toISOString(),
