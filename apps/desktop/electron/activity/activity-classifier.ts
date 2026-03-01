@@ -334,7 +334,9 @@ export function createActivityClassifier() {
       // Stable key so we don't restart inference constantly when window titles change.
       const key = `${ctx.appName}|${baseDomain ?? ''}`;
       const now = Date.now();
-      if (key === lastKey && lastResult && now - lastAt < VISION_THROTTLE_MS) {
+      // Only apply the throttle for background calls (no explicit opts). The telemetry scanner already
+      // rate-limits itself and expects a fresh classification each cycle.
+      if (!opts && key === lastKey && lastResult && now - lastAt < VISION_THROTTLE_MS) {
         return lastResult;
       }
 
