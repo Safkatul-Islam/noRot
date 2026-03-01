@@ -1,196 +1,436 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useSpring } from 'motion/react';
+import { Mic, MicOff, PhoneOff, RotateCcw, Save, Settings, Volume2, VolumeX, X } from 'lucide-react';
+import { PERSONAS } from '@norot/shared';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Slider } from '@/components/ui/slider';
+import { VoiceOrb } from '@/components/VoiceOrb';
+import { useVoiceAgent } from '@/hooks/useVoiceAgent';
+import { useTranscriptTodoExtraction } from '@/hooks/useTranscriptTodoExtraction';
+import { PANEL_SPRING } from '@/components/ProposedTasksPanel';
+import { useVoiceChatStore, selectHasProposedTodos, selectShowProposedPanel } from '@/stores/voice-chat-store';
+import { useSettingsStore } from '@/stores/settings-store';
+import { useAppStore } from '@/stores/app-store';
+import { getNorotAPI } from '@/lib/norot-api';
+import { cn } from '@/lib/utils';
+import { PERSONA_ICON_MAP } from '@/lib/persona-icons';
 
-import { useConversation } from '@elevenlabs/react'
-import type { SessionConfig } from '@elevenlabs/react'
-import type { IncomingSocketEvent } from '@elevenlabs/client'
+export function VoiceChatDialog() {
+  const { isOpen, close, clearProposedTodos } = useVoiceChatStore();
+  const storeHasProposed = useVoiceChatStore(selectHasProposedTodos);
+  const showProposed = useVoiceChatStore(selectShowProposedPanel);
+  const persona = useSettingsStore((s) => s.persona);
+  const {
+    startConversation,
+    stopConversation,
+    status,
+    isSpeaking,
+    transcript,
+    error,
+    micMuted,
+    setMicMuted,
+    volume,
+    setVolume,
+    sendUserActivity,
+  } = useVoiceAgent();
 
-import { IPC_CHANNELS } from '../ipc-channels'
+  // Extraction runs inside the dialog (needs transcript + status).
+  // The ProposedTasksPanel is rendered separately in App.tsx (outside motion wrappers).
+  useTranscriptTodoExtraction(transcript, status);
 
-type VoiceChatMode = 'coach' | 'checkin'
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hasStartedRef = useRef(false);
+  const startConversationRef = useRef(startConversation);
+  startConversationRef.current = startConversation;
+  const sendUserActivityRef = useRef(sendUserActivity);
+  sendUserActivityRef.current = sendUserActivity;
+  const lastTranscriptAtRef = useRef<number>(Date.now());
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
-interface EnsureAgentResult {
-  agentId: string
-  conversationToken?: string
-  signedUrl?: string
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function parseStructuredError(error: unknown): { code: string; message: string } | null {
-  const message = errorMessage(error)
-  try {
-    const parsed = JSON.parse(message) as unknown
-    if (!isRecord(parsed)) return null
-    const code = parsed.code
-    const msg = parsed.message
-    if (typeof code === 'string' && typeof msg === 'string') return { code, message: msg }
-    return null
-  } catch {
-    return null
-  }
-}
-
-function eventToLine(event: IncomingSocketEvent): string {
-  const type = (event as { type?: unknown }).type
-  if (typeof type !== 'string') return 'event'
-  const text = (event as { text?: unknown }).text
-  if (typeof text === 'string' && text.trim()) return `${type}: ${text.trim()}`
-  const agentText = (event as { message?: unknown }).message
-  if (typeof agentText === 'string' && agentText.trim()) return `${type}: ${agentText.trim()}`
-  return type
-}
-
-function toSessionConfig(ensure: EnsureAgentResult, preferred: 'webrtc' | 'websocket'): SessionConfig {
-  if (preferred === 'websocket' && typeof ensure.signedUrl === 'string' && ensure.signedUrl.length > 0) {
-    return { signedUrl: ensure.signedUrl, connectionType: 'websocket' }
-  }
-  if (typeof ensure.conversationToken === 'string' && ensure.conversationToken.length > 0) {
-    return { conversationToken: ensure.conversationToken, connectionType: 'webrtc' }
-  }
-  return { agentId: ensure.agentId, connectionType: 'webrtc' }
-}
-
-export function VoiceChatDialog(props: { open: boolean; mode: VoiceChatMode; onClose: () => void }) {
-  const [lines, setLines] = useState<string[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [conversationId, setConversationId] = useState<string | null>(null)
-
-  const title = props.mode === 'checkin' ? 'Check-in' : 'Coach'
-
-  const conversation = useConversation({
-    onMessage: (event) => {
-      setLines(prev => [eventToLine(event), ...prev].slice(0, 200))
-    },
-    onError: (err) => {
-      const structured = parseStructuredError(err)
-      setError(structured ? structured.message : errorMessage(err))
-    }
-  })
-
-  const canStart = props.open && conversation.status !== 'connecting' && conversation.status !== 'connected'
-  const canEnd = props.open && conversation.status === 'connected'
-
+  // Auto-start conversation when dialog opens
   useEffect(() => {
-    if (!props.open) return
-    setError(null)
-  }, [props.open])
+    if (isOpen && !hasStartedRef.current) {
+      hasStartedRef.current = true;
+      startConversationRef.current();
+    }
+    if (!isOpen) {
+      hasStartedRef.current = false;
+      setConfirmingClose(false);
+    }
+  }, [isOpen]);
 
+  const isConnected = status === 'connected';
+  const isConnecting = status === 'connecting';
+
+  // Track transcript activity so we can avoid infinite keepalive pings.
   useEffect(() => {
-    if (!props.open) return
-    return () => {
-      void conversation.endSession()
+    if (transcript.length > 0) lastTranscriptAtRef.current = Date.now();
+  }, [transcript.length]);
+
+  // Prevent ElevenLabs' default "Are you still there?"-style nudges by
+  // periodically signaling user activity during silence.
+  useEffect(() => {
+    if (!isConnected) return;
+    // Kick once on connect so we beat the default timeout window.
+    lastTranscriptAtRef.current = Date.now();
+    sendUserActivityRef.current();
+
+    const KEEPALIVE_WINDOW_MS = 60_000;
+    const interval = setInterval(() => {
+      // Only needed while waiting for the user (i.e., not while the agent talks)
+      const sinceLastMsg = Date.now() - lastTranscriptAtRef.current;
+      if (sinceLastMsg <= KEEPALIVE_WINDOW_MS && !isSpeaking) {
+        sendUserActivityRef.current();
+      }
+    }, 5_000);
+    return () => clearInterval(interval);
+  }, [isConnected, isSpeaking]);
+
+  // Auto-dismiss confirmation if connection drops and no proposed todos
+  useEffect(() => {
+    if (!isConnected && !storeHasProposed && confirmingClose) {
+      setConfirmingClose(false);
     }
-  }, [conversation, props.open])
+  }, [isConnected, storeHasProposed, confirmingClose]);
 
-  const ensureChannel = useMemo(() => {
-    return props.mode === 'checkin' ? IPC_CHANNELS.voice.ensureCheckinAgent : IPC_CHANNELS.voice.ensureVoiceAgent
-  }, [props.mode])
+  // Close with confirmation guard
+  const requestClose = () => {
+    if (isConnected || storeHasProposed) {
+      setConfirmingClose(true);
+    } else {
+      doClose();
+    }
+  };
 
-  const start = async () => {
-    setError(null)
-    setLines([])
+  const doClose = () => {
+    stopConversation();
+    // Don't clear proposed todos — the standalone panel persists after close
+    close();
+  };
+
+  const handleSaveAndClose = async () => {
+    const { proposedTodos } = useVoiceChatStore.getState();
+    const allHaveTimes = proposedTodos.length > 0 && proposedTodos.every(
+      (t) => typeof t.deadline === 'string' && t.deadline,
+    );
+    if (!allHaveTimes) return;
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      await getNorotAPI().appendTodos(proposedTodos);
+      clearProposedTodos();
     } catch (err) {
-      setError(errorMessage(err))
-      return
+      console.error('[voice-chat] Failed to save tasks:', err);
     }
+    stopConversation();
+    close();
+  };
 
-    let ensure: EnsureAgentResult
-    try {
-      ensure = await window.norot.invoke<EnsureAgentResult>(ensureChannel, { connectionType: 'webrtc' })
-    } catch (err) {
-      const structured = parseStructuredError(err)
-      setError(structured ? structured.message : errorMessage(err))
-      return
+  // Auto-scroll transcript — target the Radix ScrollArea viewport, not the inner div
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // The actual scrollable element is the ScrollArea viewport (parent of our div)
+    const viewport = el.closest('[data-slot="scroll-area-viewport"]') ?? el.parentElement;
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight;
     }
+  }, [transcript]);
 
-    try {
-      const id = await conversation.startSession(toSessionConfig(ensure, 'webrtc'))
-      setConversationId(id)
-    } catch (err) {
-      const structured = parseStructuredError(err)
-      setError(structured ? structured.message : errorMessage(err))
-    }
-  }
+  const statusText = isConnecting
+    ? 'Connecting...'
+    : isConnected
+      ? (isSpeaking ? 'noRot is speaking...' : 'Listening...')
+      : 'Ready to connect';
 
-  const end = async () => {
-    setError(null)
-    try {
-      await conversation.endSession()
-    } catch (err) {
-      setError(errorMessage(err))
-    }
-  }
+  const PersonaIcon = PERSONA_ICON_MAP[persona];
+  const personaLabel = PERSONAS[persona].label;
+  const keepTalkingRef = useRef<HTMLButtonElement>(null);
 
-  if (!props.open) return null
+  // Shift dialog left when proposed panel is visible
+  const dialogContentRef = useRef<HTMLDivElement>(null);
+  const shiftX = useSpring(0, PANEL_SPRING);
+  useEffect(() => {
+    shiftX.set(showProposed ? -170 : 0);
+  }, [showProposed, shiftX]);
+  useEffect(() => {
+    return shiftX.on('change', (v) => {
+      if (dialogContentRef.current) {
+        dialogContentRef.current.style.transform = `translateX(${v}px)`;
+      }
+    });
+  }, [shiftX]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="w-full max-w-2xl rounded-xl border border-white/10 bg-black/70 p-5 backdrop-blur">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="text-sm text-white/60">Voice chat</div>
-            <div className="text-xl font-semibold">{title}</div>
-            <div className="mt-1 text-xs text-white/60">
-              Status: {conversation.status}{conversationId ? ` · ${conversationId}` : ''}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="rounded bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
-            onClick={props.onClose}
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) requestClose();
+      }}
+    >
+      <AnimatePresence>
+        {isOpen && (
+            <DialogContent
+              ref={dialogContentRef}
+              showCloseButton={false}
+              className="w-[calc(100vw-4rem)] max-w-6xl h-[calc(100vh-4rem)] flex flex-col p-0 gap-0 overflow-hidden"
+              onEscapeKeyDown={(e) => {
+                // Escape goes through confirmation when connected or has proposed todos
+                if (isConnected || storeHasProposed) {
+                  e.preventDefault();
+                  setConfirmingClose(true);
+              }
+            }}
           >
-            Close
-          </button>
-        </div>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="flex flex-col h-full"
+            >
+              {/* -- Header -- */}
+              <DialogHeader className="shrink-0 px-6 pt-5 pb-4 border-b border-white/[0.06]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-8 items-center justify-center rounded-full bg-primary/10 border border-primary/20">
+                      <PersonaIcon className="size-4 text-primary" />
+                    </div>
+                    <div>
+                      <DialogTitle className="text-base">noRot Coach</DialogTitle>
+                      <DialogDescription className="text-xs text-text-secondary mt-0.5">
+                        {personaLabel} — plan tasks, break down work, get unstuck
+                      </DialogDescription>
+                    </div>
+                  </div>
+                  <button
+                    onClick={requestClose}
+                    className="inline-flex size-8 items-center justify-center rounded-md border border-transparent text-text-secondary opacity-80 transition-all hover:border-primary/35 hover:bg-primary/12 hover:text-primary hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    aria-label="Close"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              </DialogHeader>
 
-        {error ? (
-          <div className="mt-4 rounded border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200">
-            {error}
-          </div>
-        ) : null}
+              {/* -- Orb Band -- */}
+              <div className="shrink-0 flex flex-col items-center py-4 gap-2">
+                <div style={{ width: 120, height: 120 }}>
+                  <VoiceOrb interactive={false} paused={!isConnected} />
+                </div>
+                <span className="text-xs text-text-secondary">{statusText}</span>
+              </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={!canStart}
-            className="rounded bg-white/15 px-4 py-2 text-sm enabled:hover:bg-white/20 disabled:opacity-50"
-            onClick={() => void start()}
-          >
-            Start
-          </button>
-          <button
-            type="button"
-            disabled={!canEnd}
-            className="rounded bg-white/10 px-4 py-2 text-sm enabled:hover:bg-white/15 disabled:opacity-50"
-            onClick={() => void end()}
-          >
-            End
-          </button>
-        </div>
+              {/* -- Transcript -- */}
+              <div className="flex-1 min-h-0 px-6 pb-4">
+                <ScrollArea className="h-full rounded-lg border border-white/6 bg-black/20 p-3">
+                  <div ref={scrollRef} className="space-y-3">
+                    {transcript.length === 0 ? (
+                      <div className="flex items-center justify-center h-full min-h-[120px]">
+                        <p className="text-sm text-text-secondary/50 italic text-center">
+                          {isConnecting
+                            ? 'Connecting to your coach...'
+                            : isConnected
+                              ? 'Say something to get started. Try "What should I work on first?"'
+                              : 'Conversation will appear here...'}
+                        </p>
+                      </div>
+                    ) : (
+                      transcript.map((msg, i) => {
+                        const prevRole = i > 0 ? transcript[i - 1].role : null;
+                        const showLabel = msg.role !== prevRole;
+                        return (
+                          <div key={i}>
+                            {showLabel && (
+                              <p
+                                className={cn(
+                                  'text-[10px] font-medium uppercase tracking-wider mb-1',
+                                  msg.role === 'user'
+                                    ? 'text-right text-text-secondary/60'
+                                    : 'text-text-secondary/60'
+                                )}
+                              >
+                                {msg.role === 'user' ? 'You' : 'noRot'}
+                              </p>
+                            )}
+                            <div
+                              className={cn(
+                                'text-sm rounded-xl px-3 py-2 max-w-[85%] leading-relaxed',
+                                msg.role === 'user'
+                                  ? 'ml-auto bg-primary/15 text-text-primary'
+                                  : 'bg-white/5 text-text-secondary border border-white/[0.04]'
+                              )}
+                            >
+                              {msg.content}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
 
-        <div className="mt-4 max-h-80 overflow-auto rounded border border-white/10 bg-white/5 p-3 text-sm">
-          {lines.length === 0 ? (
-            <div className="text-white/60">No messages yet.</div>
-          ) : (
-            <ul className="space-y-1">
-              {lines.map((l, idx) => <li key={`${idx}:${l}`}>{l}</li>)}
-            </ul>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
+                    {/* Typing indicator when AI is speaking */}
+                    {isConnected && isSpeaking && (
+                      <div className="flex items-center gap-1 pt-1">
+                        {[0, 1, 2].map((i) => (
+                          <span
+                            key={i}
+                            className="size-1.5 rounded-full bg-text-secondary/40"
+                            style={{
+                              animation: 'typing-bounce 1s ease-in-out infinite',
+                              animationDelay: `${i * 0.15}s`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+              </div>
 
-function errorMessage(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (isRecord(value)) {
-    const msg = value.message
-    if (typeof msg === 'string') return msg
-  }
-  return String(value)
+              {/* -- Error state -- */}
+              {error && (
+                <div className="shrink-0 mx-6 mt-3 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm">
+                  <p className="text-danger">{error.message}</p>
+                  <div className="flex gap-2 mt-2">
+                    {error.canRetry && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-danger/30 text-danger hover:bg-danger/10"
+                        onClick={() => {
+                          hasStartedRef.current = false;
+                          startConversation();
+                          hasStartedRef.current = true;
+                        }}
+                      >
+                        <RotateCcw className="size-3 mr-1" />
+                        Retry
+                      </Button>
+                    )}
+                    {error.code === 'NO_API_KEY' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          doClose();
+                          useAppStore.getState().setActivePage('settings');
+                        }}
+                      >
+                        <Settings className="size-3 mr-1" />
+                        Open Settings
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* -- Controls Bar -- */}
+              <div className="shrink-0 flex items-center gap-3 px-6 py-4 border-t border-white/[0.06]">
+                {/* Mic mute toggle */}
+                <Button
+                  size="icon"
+                  variant="outline"
+                  aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+                  className={cn(
+                    'size-9',
+                    micMuted && 'border-danger/30 text-danger hover:bg-danger/10'
+                  )}
+                  onClick={() => setMicMuted(!micMuted)}
+                >
+                  {micMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+                </Button>
+
+                {/* Volume control */}
+                <div className="flex items-center gap-2 min-w-[140px]">
+                  {volume === 0 ? (
+                    <VolumeX className="size-4 shrink-0 text-text-secondary" />
+                  ) : (
+                    <Volume2 className="size-4 shrink-0 text-text-secondary" />
+                  )}
+                  <Slider
+                    value={[Math.round(volume * 100)]}
+                    min={0}
+                    max={100}
+                    aria-label="AI voice volume"
+                    onValueChange={([val]) => setVolume(val / 100)}
+                    className="w-24"
+                  />
+                </div>
+
+                {/* End Conversation -- pushed right */}
+                <Button
+                  variant="outline"
+                  className="ml-auto border-danger/30 text-danger hover:bg-danger/10"
+                  onClick={requestClose}
+                >
+                  <PhoneOff className="size-4 mr-1" />
+                  End Conversation
+                </Button>
+              </div>
+
+              {/* -- Close Confirmation Overlay -- */}
+              {confirmingClose && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.15 }}
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="confirm-close-title"
+                  aria-describedby="confirm-close-desc"
+                  className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-xl bg-black/60 backdrop-blur-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      setConfirmingClose(false);
+                    }
+                  }}
+                >
+                  <p id="confirm-close-title" className="text-lg font-semibold text-text-primary">End conversation?</p>
+                  <p id="confirm-close-desc" className="text-sm text-text-secondary">
+                    {storeHasProposed
+                      ? 'You have unsaved proposed tasks.'
+                      : 'Your conversation will not be saved.'}
+                  </p>
+                  <div className="flex gap-3 mt-2">
+                    <Button
+                      ref={keepTalkingRef}
+                      autoFocus
+                      variant="outline"
+                      onClick={() => setConfirmingClose(false)}
+                    >
+                      Keep talking
+                    </Button>
+                    {storeHasProposed && (
+                      <Button
+                        variant="outline"
+                        className="border-primary/30 text-primary hover:bg-primary/10"
+                        onClick={handleSaveAndClose}
+                      >
+                        <Save className="size-3 mr-1" />
+                        Save tasks & close
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      className="border-danger/30 text-danger hover:bg-danger/10"
+                      onClick={doClose}
+                    >
+                      {storeHasProposed ? 'Close & keep drafts' : 'End chat'}
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </motion.div>
+          </DialogContent>
+        )}
+      </AnimatePresence>
+    </Dialog>
+  );
 }

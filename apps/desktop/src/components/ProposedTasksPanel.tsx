@@ -79,21 +79,21 @@ export function ProposedTasksPanel({ open }: ProposedTasksPanelProps) {
   }, [open]);
 
   const proposedCount = proposedTodos.length;
-  const proposedWithTiming = proposedTodos.filter((t) =>
-    (typeof t.deadline === 'string' && t.deadline) ||
-    (typeof t.startTime === 'string' && t.startTime) ||
-    (typeof t.durationMinutes === 'number' && Number.isFinite(t.durationMinutes) && t.durationMinutes > 0)
+  const proposedWithTimes = proposedTodos.filter(
+    (t) => typeof t.deadline === 'string' && t.deadline,
   ).length;
-  const proposedMissingTimes = Math.max(0, proposedCount - proposedWithTiming);
-  const timeProgress = proposedCount === 0 ? 0 : proposedWithTiming / proposedCount;
+  const proposedMissingTimes = Math.max(0, proposedCount - proposedWithTimes);
+  const timeProgress = proposedCount === 0 ? 0 : proposedWithTimes / proposedCount;
   const planProgress = proposedCount === 0 ? 0 : 0.4 + 0.6 * timeProgress;
-  const panelTitle = proposedCount > 0 ? 'Proposed Tasks' : 'Draft Tasks';
+  const scheduleComplete = proposedCount > 0 && proposedMissingTimes === 0;
+  const panelTitle = scheduleComplete ? 'Proposed Tasks' : 'Draft Tasks';
 
   const handleUpdateTodos = (todos: TodoItemWithEdited[]) => {
     setProposedTodos(todos.map((t) => ({ ...t, _userEdited: true })));
   };
 
   const handleSaveTasks = async () => {
+    if (!scheduleComplete) return;
     try {
       if (proposedTodos.length > 0) {
         await getNorotAPI().appendTodos(proposedTodos);
@@ -144,9 +144,9 @@ export function ProposedTasksPanel({ open }: ProposedTasksPanelProps) {
                     style={{ width: `${Math.round(planProgress * 100)}%` }}
                   />
                 </div>
-                {proposedMissingTimes > 0 && (
+                {!scheduleComplete && (
                   <p className="mt-1 text-[11px] text-text-secondary/70">
-                    Optional: add start times / durations / deadlines for {proposedMissingTimes} task{proposedMissingTimes !== 1 ? 's' : ''}.
+                    Need a time for {proposedMissingTimes} task{proposedMissingTimes !== 1 ? 's' : ''}. Say when you want to do them, or set times here.
                   </p>
                 )}
               </div>
@@ -181,9 +181,12 @@ export function ProposedTasksPanel({ open }: ProposedTasksPanelProps) {
                 size="sm"
                 className="w-full"
                 onClick={handleSaveTasks}
+                disabled={!scheduleComplete}
               >
                 <Save className="size-3.5 mr-1.5" />
-                {`Save ${proposedTodos.length} task${proposedTodos.length !== 1 ? 's' : ''}`}
+                {scheduleComplete
+                  ? `Save ${proposedTodos.length} task${proposedTodos.length !== 1 ? 's' : ''}`
+                  : 'Add times to save'}
               </Button>
             </div>
           )}

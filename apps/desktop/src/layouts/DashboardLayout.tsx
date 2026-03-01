@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Sidebar } from '@/components/Sidebar';
 import { StatusBar } from '@/components/StatusBar';
 import { TodoPanel } from '@/components/TodoPanel';
+import { getNorotAPI } from '@/lib/norot-api';
+import { useAppStore } from '@/stores/app-store';
+
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
@@ -9,6 +12,13 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [todoPanelOpen, setTodoPanelOpen] = useState(false);
+
+  useEffect(() => {
+    const unsub = getNorotAPI().onAppFocusChanged?.((data) => {
+      useAppStore.getState().setAppFocused(data.focused);
+    });
+    return () => { unsub?.(); };
+  }, []);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
