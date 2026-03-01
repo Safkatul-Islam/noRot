@@ -26,9 +26,9 @@ describe('window-classifier', () => {
     const rules = DEFAULT_CATEGORY_RULES;
 
     it('classifies browser activity on Windows via title/domain rules', () => {
-      expect(classifyApp('msedge.exe', rules, 'Some video — YouTube — Microsoft Edge')).toBe('entertainment');
+      // YouTube is treated as 50/50; content classification happens via vision.
+      expect(classifyApp('msedge.exe', rules, 'Some video — YouTube — Microsoft Edge')).toBe('neutral');
       expect(classifyApp('brave.exe', rules, 'My doc - Google Docs - Brave')).toBe('productive');
     });
   });
 });
-

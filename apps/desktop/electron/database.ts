@@ -108,12 +108,44 @@ export function initDatabase(): void {
   if (rulesRow) {
     try {
       const savedRulesRaw = JSON.parse(rulesRow.value) as CategoryRule[];
+      let changed = false;
+
       const savedRules = savedRulesRaw.filter((r) => {
         if (!r || typeof r.matchType !== 'string' || typeof r.pattern !== 'string') return false;
         // Remove known-bad overly-generic rules that can break classification (e.g., "X" matching "Xcode").
         if (r.matchType === 'app' && r.pattern.trim().toLowerCase() === 'x') return false;
         return true;
       });
+      if (savedRules.length !== savedRulesRaw.length) changed = true;
+
+      // Migrate: keep built-in defaults in sync with evolving seed rules.
+      // Only touches:
+      // - seed rules (id starts with "seed-")
+      // - legacy default rules (ids like "prod-*", "ent-*", "soc-*", "title-*") *only if* they still match the old default category,
+      // so user-edited rules won't be overridden.
+      const defaultByKey = new Map(
+        DEFAULT_CATEGORY_RULES.map((r) => [`${r.matchType}:${r.pattern.trim().toLowerCase()}`, r.category] as const)
+      );
+      for (const r of savedRules) {
+        if (!r || typeof r.matchType !== 'string' || typeof r.pattern !== 'string') continue;
+        const key = `${r.matchType}:${r.pattern.trim().toLowerCase()}`;
+        const next = defaultByKey.get(key);
+        if (!next) continue;
+
+        const id = typeof r.id === 'string' ? r.id : '';
+        const isSeed = id.startsWith('seed-');
+        const isLegacyDefault =
+          (id.startsWith('prod-') && r.category === 'productive') ||
+          (id.startsWith('ent-') && r.category === 'entertainment') ||
+          (id.startsWith('soc-') && r.category === 'social') ||
+          (id.startsWith('title-') && (r.category === 'social' || r.category === 'entertainment'));
+
+        if (!isSeed && !isLegacyDefault) continue;
+        if (r.category !== next) {
+          r.category = next;
+          changed = true;
+        }
+      }
 
       const existingKeys = new Set(
         savedRules
@@ -124,7 +156,7 @@ export function initDatabase(): void {
       // Merge in any missing seed rules without overriding user rules.
       // This keeps categorization improving over time while preserving user intent/order.
       const missing = DEFAULT_CATEGORY_RULES.filter((r) => !existingKeys.has(`${r.matchType}:${r.pattern.trim().toLowerCase()}`));
-      if (missing.length > 0 || savedRules.length !== savedRulesRaw.length) {
+      if (missing.length > 0 || changed) {
         const merged = [...savedRules, ...missing];
         db.prepare(
           "INSERT OR REPLACE INTO settings (key, value) VALUES ('categoryRules', ?)"

@@ -3,6 +3,7 @@ import path from 'path';
 import type { CategoryRule } from '../types';
 import { classifyApp, extractDomain, isBrowser } from '../window-classifier';
 import type { RawImage } from '@xenova/transformers';
+import { analyzeVisionOutputs, voteVisionDecisions, VISION_LABELS } from './vision-decision';
 
 type ActivityCategory = 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown';
 
@@ -30,6 +31,8 @@ export type ActivityClassification = {
   activitySource?: 'rules' | 'vision';
 };
 
+export type VisionProgress = { attempt: number; total: number };
+
 type ActiveWindowContext = {
   appName: string;
   windowTitle?: string;
@@ -39,24 +42,7 @@ type ActiveWindowContext = {
 
 const VISION_MODEL_ID = 'Xenova/clip-vit-base-patch32';
 const VISION_THROTTLE_MS = 10_000;
-const MIN_VISION_CONFIDENCE = 0.35;
-
-const CANDIDATE_LABELS: Array<{ label: string; kind: ActivityKind; category: ActivityCategory }> = [
-  { label: 'writing code in an IDE', kind: 'coding', category: 'productive' },
-  { label: 'debugging code', kind: 'coding', category: 'productive' },
-  { label: 'working in a spreadsheet', kind: 'spreadsheets', category: 'productive' },
-  { label: 'editing a presentation slide', kind: 'presentations', category: 'productive' },
-  { label: 'writing a document', kind: 'writing', category: 'productive' },
-  { label: 'reading technical documentation', kind: 'docs', category: 'productive' },
-  { label: 'checking email', kind: 'email', category: 'productive' },
-  { label: 'chatting in a messaging app', kind: 'chat', category: 'social' },
-  { label: 'scrolling social media', kind: 'social_feed', category: 'social' },
-  { label: 'watching an online video', kind: 'video', category: 'entertainment' },
-  { label: 'shopping online', kind: 'shopping', category: 'entertainment' },
-  { label: 'playing a video game', kind: 'games', category: 'entertainment' },
-  { label: 'using system settings', kind: 'settings', category: 'productive' },
-  { label: 'browsing files in a file manager', kind: 'file_manager', category: 'productive' },
-];
+const MIN_VISION_CONFIDENCE = 0.18; // used only as an early-stop heuristic for voting runs
 
 function brandFromDomain(domain: string): string | null {
   const d = domain.toLowerCase();
@@ -75,54 +61,105 @@ function brandFromDomain(domain: string): string | null {
   return null;
 }
 
-function rulesBasedActivity(ctx: ActiveWindowContext): ActivityClassification | null {
+type RulesHint = { override: Partial<ActivityClassification>; lockCategory: boolean };
+
+function scoreTitleKeywords(title: string, keywords: string[]): number {
+  const t = title.toLowerCase();
+  let score = 0;
+  for (const k of keywords) {
+    const kk = k.toLowerCase();
+    if (!kk) continue;
+    if (t.includes(kk)) score++;
+  }
+  return score;
+}
+
+function rulesBasedActivity(ctx: ActiveWindowContext): RulesHint | null {
   const domain = ctx.windowUrl || ctx.windowTitle ? extractDomain(ctx.windowUrl, ctx.windowTitle) : undefined;
   if (domain) {
     const brand = brandFromDomain(domain);
     if (brand === 'Instagram') {
-      return { category: 'social', activityLabel: 'scrolling Instagram', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'social', activityLabel: 'scrolling Instagram', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'TikTok') {
-      return { category: 'entertainment', activityLabel: 'scrolling TikTok', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'scrolling TikTok', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'YouTube') {
-      return { category: 'entertainment', activityLabel: 'watching YouTube', activityKind: 'video', activityConfidence: 1, activitySource: 'rules' };
+      const title = ctx.windowTitle ?? '';
+      const productiveHints = [
+        'math', 'calculus', 'algebra', 'geometry', 'linear algebra',
+        'statistics', 'probability',
+        'lecture', 'lesson', 'course', 'tutorial', 'how to', 'explained',
+        'homework', 'exam', 'problem', 'proof', 'derivation',
+        'physics', 'chemistry', 'biology', 'engineering',
+        'programming', 'coding', 'javascript', 'typescript', 'python', 'react', 'node',
+      ];
+      const entertainmentHints = [
+        'anime', 'episode', 'season', 'amv',
+        'trailer', 'movie', 'tv', 'cartoon',
+        'meme', 'funny', 'compilation', 'highlights',
+        'gameplay', 'gaming', 'stream', 'music video', 'lyrics',
+      ];
+      const p = scoreTitleKeywords(title, productiveHints);
+      const e = scoreTitleKeywords(title, entertainmentHints);
+
+      // Soft hint only: keep YouTube eligible for vision so it can override.
+      const hintedCategory =
+        p >= e + 2 ? 'productive' :
+        e >= p + 2 ? 'entertainment' :
+        'neutral';
+
+      const labelPrefix =
+        hintedCategory === 'productive' ? 'watching an educational YouTube video' :
+        hintedCategory === 'entertainment' ? 'watching YouTube for entertainment' :
+        'watching YouTube';
+
+      return {
+        override: {
+          ...(hintedCategory !== 'neutral' ? { category: hintedCategory } : {}),
+          activityLabel: labelPrefix,
+          activityKind: 'video',
+          activityConfidence: hintedCategory === 'neutral' ? 0.6 : 0.75,
+          activitySource: 'rules',
+        },
+        lockCategory: false,
+      };
     }
     if (brand === 'Reddit') {
-      return { category: 'entertainment', activityLabel: 'browsing Reddit', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'browsing Reddit', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'X') {
-      return { category: 'entertainment', activityLabel: 'browsing X', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'entertainment', activityLabel: 'browsing X', activityKind: 'social_feed', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'GitHub') {
-      return { category: 'productive', activityLabel: 'coding on GitHub', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'coding on GitHub', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'Stack Overflow') {
-      return { category: 'productive', activityLabel: 'debugging on Stack Overflow', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'debugging on Stack Overflow', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
     if (brand === 'Google Docs') {
-      return { category: 'productive', activityLabel: 'working in Google Docs', activityKind: 'docs', activityConfidence: 1, activitySource: 'rules' };
+      return { override: { category: 'productive', activityLabel: 'working in Google Docs', activityKind: 'docs', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
     }
   }
 
   const appName = ctx.appName.toLowerCase();
   if (appName.includes('code') || appName.includes('xcode') || appName.includes('intellij') || appName.includes('webstorm')) {
-    return { category: 'productive', activityLabel: 'coding', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'coding', activityKind: 'coding', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('excel') || appName.includes('numbers') || appName.includes('google sheets') || appName.includes('spreadsheet')) {
-    return { category: 'productive', activityLabel: 'working in a spreadsheet', activityKind: 'spreadsheets', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'working in a spreadsheet', activityKind: 'spreadsheets', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('powerpoint') || appName.includes('keynote') || appName.includes('slides')) {
-    return { category: 'productive', activityLabel: 'editing a presentation', activityKind: 'presentations', activityConfidence: 1, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'editing a presentation', activityKind: 'presentations', activityConfidence: 1, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('word') || appName.includes('pages') || appName.includes('notes') || appName.includes('notion')) {
-    return { category: 'productive', activityLabel: 'writing', activityKind: 'writing', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'writing', activityKind: 'writing', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('finder') || appName.includes('file explorer')) {
-    return { category: 'productive', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'browsing files', activityKind: 'file_manager', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
   if (appName.includes('system settings') || appName === 'settings') {
-    return { category: 'productive', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' };
+    return { override: { category: 'productive', activityLabel: 'changing settings', activityKind: 'settings', activityConfidence: 0.9, activitySource: 'rules' }, lockCategory: true };
   }
 
   return null;
@@ -257,7 +294,12 @@ export function createActivityClassifier() {
     async classify(
       ctx: ActiveWindowContext,
       categoryRules: CategoryRule[],
-      visionEnabled: boolean
+      visionEnabled: boolean,
+      opts?: {
+        attempts?: number;
+        attemptDelayMs?: number;
+        onProgress?: (p: VisionProgress) => void;
+      }
     ): Promise<ActivityClassification> {
       const baseCategory = classifyApp(ctx.appName, categoryRules, ctx.windowTitle, ctx.windowUrl);
       const baseDomain = isBrowser(ctx.appName) ? extractDomain(ctx.windowUrl, ctx.windowTitle) : undefined;
@@ -272,14 +314,17 @@ export function createActivityClassifier() {
 
       const rulesActivity = rulesBasedActivity(ctx);
       if (rulesActivity) {
-        return { ...base, ...rulesActivity };
+        const merged = { ...base, ...rulesActivity.override };
+        if (rulesActivity.lockCategory) return merged;
+        // Soft hint (e.g., YouTube): keep going so vision can decide.
+        Object.assign(base, merged);
       }
 
       if (!visionEnabled) return base;
 
-      // Only use CV when the app/domain is genuinely ambiguous (neutral in rules).
-      // This matches the UX spec: 50/50 apps start neutral, and vision decides per screenshot.
-      if (baseCategory !== 'neutral') return base;
+      // Don't spend vision cycles on clearly-productive apps by rules.
+      // Vision is used to continuously re-check neutral/unproductive contexts (e.g., browser content).
+      if (baseCategory === 'productive') return base;
 
       if (process.platform === 'darwin') {
         const status = systemPreferences.getMediaAccessStatus('screen');
@@ -289,37 +334,65 @@ export function createActivityClassifier() {
       // Stable key so we don't restart inference constantly when window titles change.
       const key = `${ctx.appName}|${baseDomain ?? ''}`;
       const now = Date.now();
-      if (key === lastKey && lastResult && now - lastAt < VISION_THROTTLE_MS) {
+      // Only apply the throttle for background calls (no explicit opts). The telemetry scanner already
+      // rate-limits itself and expects a fresh classification each cycle.
+      if (!opts && key === lastKey && lastResult && now - lastAt < VISION_THROTTLE_MS) {
         return lastResult;
       }
 
-      const png = await captureActiveWindowPng(ctx);
-      if (!png) return base;
-
       try {
         const { classifier, RawImage: RawImageClass } = await getVisionPipeline();
-        const pngArrayBuffer = Uint8Array.from(png).buffer;
-        const image = await RawImageClass.fromBlob(new Blob([pngArrayBuffer], { type: 'image/png' }));
-        const labels = CANDIDATE_LABELS.map((c) => c.label);
-        const output = await classifier(image, labels, {
-          hypothesis_template: 'This is a screenshot of someone {}.',
-        });
+        const attempts = Math.max(1, Math.min(5, Math.floor(opts?.attempts ?? 3)));
+        const attemptDelayMs = Math.max(0, Math.min(10_000, Math.floor(opts?.attemptDelayMs ?? 1500)));
 
-        const top = output?.[0];
-        if (!top || typeof top.label !== 'string' || typeof top.score !== 'number') return base;
-        if (!Number.isFinite(top.score) || top.score < MIN_VISION_CONFIDENCE) return base;
+        const labels = VISION_LABELS.map((c) => c.label);
+        const attemptDecisions: Array<ReturnType<typeof analyzeVisionOutputs>> = [];
 
-        const mapped = CANDIDATE_LABELS.find((c) => c.label === top.label);
+        for (let i = 0; i < attempts; i++) {
+          opts?.onProgress?.({ attempt: i + 1, total: attempts });
+
+          const png = await captureActiveWindowPng(ctx);
+          if (!png) {
+            if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+            continue;
+          }
+
+          // Best-effort privacy: avoid extra copies and wipe bytes after decoding.
+          const pngBytes = new Uint8Array(png.buffer, png.byteOffset, png.byteLength);
+          const image = await RawImageClass.fromBlob(new Blob([pngBytes], { type: 'image/png' }));
+          try { pngBytes.fill(0); } catch { /* ignore */ }
+
+          const output = await classifier(image, labels, {
+            hypothesis_template: 'This is a screenshot of someone {}.',
+          });
+
+          if (!output || output.length === 0) {
+            if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+            continue;
+          }
+
+          const decision = analyzeVisionOutputs(output);
+          attemptDecisions.push(decision);
+
+          // Early stop if we already have a confident decision.
+          if (decision.decidedCategory && decision.confidence >= MIN_VISION_CONFIDENCE) break;
+
+          if (attemptDelayMs > 0) await new Promise<void>((r) => setTimeout(r, attemptDelayMs));
+        }
+
+        const voted = voteVisionDecisions(attemptDecisions);
+        if (!voted.decidedCategory) return base;
+
         const result: ActivityClassification = {
-          category: mapped?.category ?? baseCategory,
-          activityLabel: mapped ? top.label : undefined,
-          activityKind: mapped?.kind ?? 'unknown',
-          activityConfidence: top.score,
+          category: voted.decidedCategory,
+          activityLabel: voted.topLabel ?? base.activityLabel,
+          activityKind: voted.decidedKind ?? 'unknown',
+          activityConfidence: voted.confidence,
           activitySource: 'vision',
         };
 
         lastKey = key;
-        lastAt = now;
+        lastAt = Date.now();
         lastResult = result;
         return result;
       } catch (err) {

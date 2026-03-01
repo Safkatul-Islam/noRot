@@ -360,6 +360,7 @@ function processTick(tick: TelemetryTick): void {
       activitySource: tick.activitySource,
       visionStatus: tick.visionStatus,
       visionMessage: tick.visionMessage,
+      visionNextScanInSec: tick.visionNextScanInSec ?? null,
     });
 
     sendToRenderer(IPC_CHANNELS.ON_LIVE_SCORE_UPDATE, {

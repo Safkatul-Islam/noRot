@@ -66,6 +66,22 @@ describe('FocusScoreEngine', () => {
     expect(engine.getFocusScore()).toBe(100);
   });
 
+  it('accepts decayScale but ignores it (interface compatibility)', () => {
+    const engine = new FocusScoreEngine();
+
+    // decayScale = 0 should NOT prevent decay in the simple engine
+    for (let i = 0; i < 5; i++) {
+      engine.tick({
+        activeCategory: 'social',
+        appSwitchesLast5Min: 0,
+        elapsedMs: 1000,
+        decayScale: 0,
+      });
+    }
+
+    expect(engine.getFocusScore()).toBe(75);
+  });
+
   it('neutral apps freeze the score', () => {
     const engine = new FocusScoreEngine();
 

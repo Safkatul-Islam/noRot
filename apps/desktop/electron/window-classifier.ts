@@ -76,17 +76,25 @@ export function classifyApp(
   windowUrl?: string
 ): 'productive' | 'neutral' | 'social' | 'entertainment' {
   const lower = appName.toLowerCase();
+  const browser = isBrowser(appName);
+  let browserNeutralMatched = false;
 
   // First pass: check app-name rules
   for (const rule of rules) {
     if (rule.matchType !== 'app') continue;
     if (lower.includes(rule.pattern.toLowerCase())) {
+      // For browsers, a neutral app-level rule shouldn't block domain/title rules.
+      // This keeps "Google Chrome" neutral while still classifying "Chrome (youtube.com)" as entertainment, etc.
+      if (browser && rule.category === 'neutral') {
+        browserNeutralMatched = true;
+        continue;
+      }
       return rule.category;
     }
   }
 
   // Second pass: if it's a browser, extract domain and check title rules
-  if (isBrowser(appName) && (windowTitle || windowUrl)) {
+  if (browser && (windowTitle || windowUrl)) {
     const domain = extractDomain(windowUrl, windowTitle);
     if (domain) {
       for (const rule of rules) {
@@ -98,5 +106,8 @@ export function classifyApp(
     }
   }
 
-  return 'neutral';
+  if (browser && browserNeutralMatched) return 'neutral';
+
+  // Default: treat unknown apps as productive. (Neutral is reserved for explicitly-marked 50/50 apps like browsers.)
+  return 'productive';
 }

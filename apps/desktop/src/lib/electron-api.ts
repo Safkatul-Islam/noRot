@@ -65,6 +65,7 @@ export interface NoRotAPI {
     activitySource?: 'rules' | 'vision';
     visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
     visionMessage?: string;
+    visionNextScanInSec?: number | null;
   }) => void): () => void;
   respondToIntervention(
     eventId: string,

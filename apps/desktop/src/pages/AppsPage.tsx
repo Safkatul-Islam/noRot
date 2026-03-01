@@ -242,7 +242,16 @@ export function AppsPage() {
             <div className="size-4 mt-0.5" />
           )}
           <div className="min-w-0">
-            <p className="text-xs text-text-muted uppercase tracking-wider">AI Vision</p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-text-muted uppercase tracking-wider">AI Vision</p>
+              <span className="text-[10px] text-text-muted bg-white/[0.06] rounded-full px-2 py-0.5 tabular-nums">
+                Next: {activityStatus?.visionStatus === 'classifying'
+                  ? 'scanning…'
+                  : activityStatus?.visionNextScanInSec != null
+                    ? `${activityStatus.visionNextScanInSec}s`
+                    : '—'}
+              </span>
+            </div>
             <p className="text-sm text-text-primary truncate">
               {activityStatus
                 ? `${activityStatus.appName}${activityStatus.activeDomain ? ` (${activityStatus.activeDomain})` : ''}`
@@ -257,7 +266,7 @@ export function AppsPage() {
                     ? (activityStatus.visionMessage ?? 'Scanning this app window to classify it…')
                     : activityStatus.activitySource === 'vision'
                       ? `Classified as ${activeUiCategory}.`
-                      : (activityStatus.visionMessage ?? 'No scanning needed right now.')}
+                      : (activityStatus.visionMessage ?? 'Already classified.')}
             </p>
           </div>
         </div>
