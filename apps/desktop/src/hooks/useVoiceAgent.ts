@@ -1,13 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useConversation } from '@elevenlabs/react';
 import { useVoiceStatusStore } from '@/stores/voice-status-store';
 import { getNorotAPI } from '@/lib/norot-api';
 import { createTodoClientTools } from '@/lib/voice-client-tools';
+import type { DraftAwareOptions, TodoToolBackend } from '@/lib/todo-tool-backend';
+import { DraftAwareTodoBackend, DbTodoBackend } from '@/lib/todo-tool-backend';
 import type { VoiceAgentError } from '@/lib/voice-errors';
 import { parseVoiceError } from '@/lib/voice-errors';
 import type { ChatMessage } from '@norot/shared';
 
-export function useVoiceAgent(opts?: { mode?: 'coach' | 'checkin' }) {
+export function useVoiceAgent(opts?: {
+  mode?: 'coach' | 'checkin';
+  /**
+   * Where drafted todos should live in coach mode.
+   * If omitted, coach-mode tools will write directly to the DB.
+   */
+  draftTodos?: DraftAwareOptions;
+  /** Override the tool backend entirely (advanced). */
+  backend?: TodoToolBackend;
+}) {
   const mode = opts?.mode ?? 'coach';
   const [transcript, setTranscript] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<VoiceAgentError | null>(null);
@@ -18,11 +29,27 @@ export function useVoiceAgent(opts?: { mode?: 'coach' | 'checkin' }) {
   const userInitiatedStopRef = useRef(false);
   const prevStatusRef = useRef<string>('idle');
 
+  const draftTodosRef = useRef<DraftAwareOptions | undefined>(opts?.draftTodos);
+  draftTodosRef.current = opts?.draftTodos;
+
   // Track mount state so retry timeout doesn't update unmounted component
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  // Create the right backend based on mode:
+  // - Coach mode: drafts are optional; if not provided, write to DB
+  // - Check-in mode: writes go directly to the database
+  const backend = useMemo(() => {
+    if (opts?.backend) return opts.backend;
+    if (mode === 'coach') {
+      const draftTodos = draftTodosRef.current;
+      if (draftTodos) return new DraftAwareTodoBackend(draftTodos);
+      return new DbTodoBackend();
+    }
+    return new DbTodoBackend();
+  }, [mode, opts?.backend]);
 
   const conversation = useConversation({
     micMuted,
@@ -42,7 +69,7 @@ export function useVoiceAgent(opts?: { mode?: 'coach' | 'checkin' }) {
         canRetry: true,
       });
     },
-    clientTools: createTodoClientTools(mode === 'checkin' ? 'checkin-agent' : 'voice-agent'),
+    clientTools: createTodoClientTools(backend),
   });
 
   useEffect(() => {

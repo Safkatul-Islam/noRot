@@ -63,7 +63,12 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
   const [manualTodos, setManualTodos] = useState<TodoItem[]>([]);
 
   // Voice agent hook
-  const voiceAgent = useVoiceAgent();
+  const draftTodos = useMemo(() => ({
+    getDrafts: () => useDailySetupStore.getState().previewTodos,
+    setDrafts: (todos: TodoItem[]) => useDailySetupStore.getState().setPreviewTodos(todos),
+  }), []);
+
+  const voiceAgent = useVoiceAgent({ mode: 'coach', draftTodos });
 
   // Check if API keys are configured & load persona
   useEffect(() => {
@@ -131,6 +136,7 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
     voiceAgent.transcript,
     voiceAgent.status,
     extractionCallbacks,
+    { enabled: false },
   );
 
   const settleBubble = useCallback((id: string) => {
@@ -303,11 +309,6 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                   {isElectron() && !hasElevenLabs && (
                     <p className="text-xs text-text-muted">
                       Add an ElevenLabs API key in Settings to unlock voice mode.
-                    </p>
-                  )}
-                  {isElectron() && hasElevenLabs && !hasGemini && (
-                    <p className="text-xs text-text-muted">
-                      Voice mode is enabled. Add a Gemini API key in Settings to auto-extract tasks from your conversation.
                     </p>
                   )}
                 </div>

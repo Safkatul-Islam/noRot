@@ -27,6 +27,11 @@ export function VoiceChatDialog() {
   const isExtracting = useVoiceChatStore((s) => s.isExtracting);
   const missingGeminiKey = useVoiceChatStore((s) => s.missingGeminiKey);
 
+  const draftTodos = useMemo(() => ({
+    getDrafts: () => useVoiceChatStore.getState().proposedTodos,
+    setDrafts: (todos: TodoItem[]) => useVoiceChatStore.getState().setProposedTodos(todos),
+  }), []);
+
   const {
     startConversation,
     stopConversation,
@@ -39,7 +44,7 @@ export function VoiceChatDialog() {
     volume,
     setVolume,
     sendUserActivity,
-  } = useVoiceAgent({ mode });
+  } = useVoiceAgent({ mode, draftTodos });
 
   const hasStartedRef = useRef(false);
   const startConversationRef = useRef(startConversation);
@@ -98,7 +103,7 @@ export function VoiceChatDialog() {
     transcript,
     status,
     extractionCallbacks,
-    { enabled: mode === 'coach' },
+    { enabled: false },
   );
 
   // Auto-start conversation when dialog opens

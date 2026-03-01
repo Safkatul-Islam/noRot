@@ -20,7 +20,7 @@ async function fetchWithNetworkError(
   }
 }
 
-const AGENT_CONFIG_VERSION = 7;
+const AGENT_CONFIG_VERSION = 8;
 
 const COACH_TURN_CONFIG = {
   turn_timeout: 60,
@@ -50,8 +50,12 @@ const UPDATE_TODO_TOOL = {
     properties: {
       todo_text: { type: 'string', description: 'The current text of the task to update (or a close match).' },
       new_text: { type: 'string', description: 'New text for the task. Omit to keep unchanged.' },
-      deadline: { type: 'string', description: 'New deadline in HH:MM format. Omit to keep unchanged.' },
+      deadline: { type: 'string', description: 'New deadline time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 2 hours". Omit to keep unchanged.' },
       app: { type: 'string', description: 'App name to associate. Omit to keep unchanged.' },
+      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 30 minutes". Omit to keep unchanged.' },
+      duration_minutes: { type: 'number', description: 'Duration in minutes. Omit to keep unchanged.' },
+      url: { type: 'string', description: 'Relevant URL. Omit to keep unchanged.' },
+      allowed_apps: { type: 'array', items: { type: 'string' }, description: 'Allowed apps/sites during this task. Omit to keep unchanged.' },
     },
   },
   expects_response: true,
@@ -99,7 +103,27 @@ const LIST_TODOS_TOOL = {
   expects_response: true,
 } as const;
 
-const ALL_TOOLS = [SKIP_TURN_TOOL, LIST_TODOS_TOOL, UPDATE_TODO_TOOL, DELETE_TODO_TOOL, TOGGLE_TODO_TOOL];
+const ADD_TODO_TOOL = {
+  type: 'client',
+  name: 'add_todo',
+  description: "Add a new task to the user's draft list. Call this when the user mentions a task they need to do. Include timing/duration/app info if discussed.",
+  parameters: {
+    type: 'object',
+    required: ['text'],
+    properties: {
+      text: { type: 'string', description: 'Task description.' },
+      duration_minutes: { type: 'number', description: 'Duration in minutes. Omit if not discussed.' },
+      start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 30 minutes". Omit if not discussed.' },
+      deadline: { type: 'string', description: 'Deadline time. Prefer HH:MM 24h, but you may also use relative like "in 2 hours". Omit if not discussed.' },
+      app: { type: 'string', description: 'Primary app (e.g. "VS Code", "Chrome"). Omit if not discussed.' },
+      url: { type: 'string', description: 'Relevant URL. Omit if not discussed.' },
+      allowed_apps: { type: 'array', items: { type: 'string' }, description: 'Allowed apps/sites during this task. Omit if not discussed.' },
+    },
+  },
+  expects_response: true,
+} as const;
+
+const ALL_TOOLS = [SKIP_TURN_TOOL, LIST_TODOS_TOOL, ADD_TODO_TOOL, UPDATE_TODO_TOOL, DELETE_TODO_TOOL, TOGGLE_TODO_TOOL];
 
 const PERSONA_STYLES: Record<Persona, string> = {
   calm_friend: 'warm, supportive, and empathetic',
@@ -133,7 +157,7 @@ function buildCoachPrompt(
         'Help the user plan what to do next by asking for: (1) the tasks, (2) rough duration, and (3) timing (start time or deadline).',
         'Timing can be relative ("right now", "in 2 hours") or exact ("at 3pm"). Do NOT ask for a specific HH:MM format.',
         'If a task is missing a time, ask a follow-up question before summarizing the final list.',
-        'Do not claim you added tasks to a list. Instead, help the user clarify tasks and timing, and keep it conversational.',
+        'When the user mentions a concrete task they need to do on their computer, call add_todo immediately (include whatever details you have). If anything is missing (duration, timing, app), ask ONE quick follow-up question, then call update_todo to fill it in. For "start right now", use start_time: "now". These are draft tasks — the user will review and save them after the conversation.',
         'You can update, delete, or mark tasks as done using your tools. When the user asks to change, remove, or complete a task, use the appropriate tool. You can also proactively suggest changes (e.g., "It sounds like you finished X — want me to mark it done?").',
         'If you need to know what tasks exist (e.g. user says "delete both"), use the list_todos tool, then act on the returned list.',
         'When the user is silent or thinking, do not prompt them. Use the skip_turn tool to wait silently.',
@@ -151,7 +175,7 @@ function buildCoachPrompt(
         'Help the user plan what to do next by asking for: (1) the tasks, (2) rough duration, and (3) timing (start time or deadline).',
         'Timing can be relative ("right now", "in 2 hours") or exact ("at 3pm"). Do NOT ask for a specific HH:MM format.',
         'If a task is missing a time, ask a follow-up question before summarizing the final list.',
-        'Do not claim you added tasks to a list. Instead, help the user clarify tasks and timing, and keep it conversational.',
+        'When the user mentions a concrete task they need to do on their computer, call add_todo immediately (include whatever details you have). If anything is missing (duration, timing, app), ask ONE quick follow-up question, then call update_todo to fill it in. For "start right now", use start_time: "now". These are draft tasks — the user will review and save them after the conversation.',
         'You can update, delete, or mark tasks as done using your tools. When the user asks to change, remove, or complete a task, use the appropriate tool. You can also proactively suggest changes (e.g., "It sounds like you finished X — want me to mark it done?").',
         'If you need to know what tasks exist (e.g. user says "delete both"), use the list_todos tool, then act on the returned list.',
         'When the user is silent or thinking, do not prompt them. Use the skip_turn tool to wait silently.',
@@ -376,6 +400,7 @@ async function createCheckinAgent(
       ? "No slurs, hate, or threats. Do not insult the user's identity - roast the behavior/loop."
       : 'Do not shame or guilt-trip. Adding guilt makes it worse.',
     'Ask what they intended to work on, then help them pick ONE small next step they can start right now.',
+    'If the user mentions a new task they need to do, use add_todo to add it.',
     'You can update, delete, or mark tasks as done using your tools. When the user says they finished something, offer to mark it done.',
     'If you need to know what tasks exist (e.g. user says "delete both"), use the list_todos tool, then act on the returned list.',
     'Keep responses to 2-3 sentences.',
