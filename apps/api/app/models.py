@@ -7,6 +7,11 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+PersonaId = Literal["calm_friend", "coach", "tough_love"]
+Severity = Literal[0, 1, 2, 3, 4]
+RecommendationMode = Literal["none", "nudge", "remind", "interrupt", "crisis"]
+
+
 class FocusIntent(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

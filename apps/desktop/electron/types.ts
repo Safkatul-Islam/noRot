@@ -125,7 +125,7 @@ export interface UserSettings {
   geminiApiKey: string;
   muted: boolean;
   ttsEngine: 'auto' | 'elevenlabs' | 'local';
-  scriptSource: 'default' | 'gemini';
+  scriptSource: 'default' | 'gemini' | 'amd';
   visionEnabled: boolean;
   categoryRules: CategoryRule[];
   hasCompletedOnboarding: boolean;
@@ -140,6 +140,8 @@ export interface UserSettings {
   elevenLabsAgentVersion: number;
   monitoringEnabled: boolean;
   selectedVoiceId: string;
+  amdEndpointUrl: string;
+  amdApiKey: string;
 }
 
 export const KNOWN_BROWSERS = [
@@ -209,4 +211,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   elevenLabsAgentVersion: 0,
   monitoringEnabled: true,
   selectedVoiceId: '',
+  amdEndpointUrl: '',
+  amdApiKey: '',
 };

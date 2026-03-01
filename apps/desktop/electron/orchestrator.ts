@@ -27,6 +27,7 @@ import { buildZeroFocusInterventionText } from './intervention-text';
 import { buildStableRecommendationText } from './recommendation-text';
 import { buildPraiseText } from './praise-text';
 import { generateScript, generateContextAwareScript } from './gemini-client';
+import { generateScript as amdGenerateScript, generateContextAwareScript as amdGenerateContextAwareScript } from './amd-client';
 import { clearContextCache } from './context-checker';
 import { getMainWindow, closeInterventionOverlayWindow, showInterventionOverlayWindow, isInterventionOverlayVisible } from './window-manager';
 import { isSnoozeActive } from './snooze-state';
@@ -627,6 +628,34 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         } else {
           interventionText = await generateScript(
             settings.geminiApiKey,
+            scoreResult.severity,
+            scoreResult.recommendation.persona,
+            settings.toughLoveExplicitAllowed,
+          );
+        }
+      }
+
+      else if (!forceLocalScript && settings.scriptSource === 'amd' && settings.amdEndpointUrl) {
+        if (snapshot.categories.contextOverride || snapshot.categories.contextTodo || overdueTodos.length > 0) {
+          interventionText = await amdGenerateContextAwareScript(
+            settings.amdEndpointUrl,
+            settings.amdApiKey,
+            scoreResult.severity,
+            scoreResult.recommendation.persona,
+            {
+              appName: snapshot.categories.activeApp,
+              windowTitle: undefined,
+              domain: snapshot.categories.activeDomain,
+              activeTodos,
+              matchedTodo: snapshot.categories.contextTodo,
+              overdueTodos: overdueTodos.length > 0 ? overdueTodos : undefined,
+            },
+            settings.toughLoveExplicitAllowed,
+          );
+        } else {
+          interventionText = await amdGenerateScript(
+            settings.amdEndpointUrl,
+            settings.amdApiKey,
             scoreResult.severity,
             scoreResult.recommendation.persona,
             settings.toughLoveExplicitAllowed,

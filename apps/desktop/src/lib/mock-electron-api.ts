@@ -34,6 +34,8 @@ let mockSettings: Record<string, unknown> = {
   elevenLabsAgentVersion: 0,
   monitoringEnabled: true,
   selectedVoiceId: '',
+  amdEndpointUrl: '',
+  amdApiKey: '',
 };
 
 let mockSnoozedUntil: number | null = null;

@@ -247,7 +247,7 @@ export function registerIpcHandlers(): void {
       testCategories,
     );
 
-    // Try Gemini for a dynamic script, fall back to hardcoded text
+    // Try AI provider for a dynamic script, fall back to hardcoded text
     if (settings.scriptSource === 'gemini' && settings.geminiApiKey) {
       const geminiText = await generateScript(
         settings.geminiApiKey,
@@ -256,6 +256,16 @@ export function registerIpcHandlers(): void {
         settings.toughLoveExplicitAllowed,
       );
       if (geminiText) text = geminiText;
+    } else if (settings.scriptSource === 'amd' && settings.amdEndpointUrl) {
+      const { generateScript: amdGenerate } = await import('./amd-client');
+      const amdText = await amdGenerate(
+        settings.amdEndpointUrl,
+        settings.amdApiKey,
+        1 as Severity,
+        settings.persona,
+        settings.toughLoveExplicitAllowed,
+      );
+      if (amdText) text = amdText;
     }
 
     const intervention: InterventionEvent = {

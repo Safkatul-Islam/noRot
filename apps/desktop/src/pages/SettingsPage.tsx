@@ -163,7 +163,11 @@ export function SettingsPage() {
   const [permissionsRequestStarted, setPermissionsRequestStarted] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(true);
   const [savingVisionEnabled, setSavingVisionEnabled] = useState(false);
-  const [scriptSource, setScriptSourceLocal] = useState<'default' | 'gemini'>('default');
+  const [scriptSource, setScriptSourceLocal] = useState<'default' | 'gemini' | 'amd'>('default');
+  const [amdConfigured, setAmdConfigured] = useState(false);
+  const [amdEndpointUrlDraft, setAmdEndpointUrlDraft] = useState('');
+  const [amdApiKeyDraft, setAmdApiKeyDraft] = useState('');
+  const [savingAmdSettings, setSavingAmdSettings] = useState(false);
   const [autoShowTodoOverlay, setAutoShowTodoOverlay] = useState(true);
   const [togglingOverlay, setTogglingOverlay] = useState(false);
   const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('12h');
@@ -229,6 +233,12 @@ export function SettingsPage() {
             : '';
         if (!cancelled) setGeminiConfigured(geminiKey.length > 0);
         if (!cancelled) setScriptSourceLocal(settings?.scriptSource ?? 'default');
+
+        const amdUrl =
+          typeof settings?.amdEndpointUrl === 'string'
+            ? settings.amdEndpointUrl.trim()
+            : '';
+        if (!cancelled) setAmdConfigured(amdUrl.length > 0);
 
         if (!cancelled) setVisionEnabled(settings?.visionEnabled ?? true);
         if (!cancelled) setAutoShowTodoOverlay(settings?.autoShowTodoOverlay ?? true);
@@ -384,7 +394,28 @@ export function SettingsPage() {
     }
   };
 
-  const updateScriptSource = async (next: 'default' | 'gemini') => {
+  const saveAmdSettings = async () => {
+    const nextUrl = amdEndpointUrlDraft.trim();
+    const nextKey = amdApiKeyDraft.trim();
+    setSavingAmdSettings(true);
+    try {
+      const api = getNorotAPI();
+      await api.updateSettings({ amdEndpointUrl: nextUrl, amdApiKey: nextKey });
+      setAmdConfigured(nextUrl.length > 0);
+      if (nextUrl.length === 0 && scriptSource === 'amd') {
+        setScriptSourceLocal('default');
+        await api.updateSettings({ scriptSource: 'default' });
+      }
+      setAmdEndpointUrlDraft('');
+      setAmdApiKeyDraft('');
+    } catch {
+      // ignore
+    } finally {
+      setSavingAmdSettings(false);
+    }
+  };
+
+  const updateScriptSource = async (next: 'default' | 'gemini' | 'amd') => {
     setScriptSourceLocal(next);
     try {
       await getNorotAPI().updateSettings({ scriptSource: next });
@@ -494,8 +525,8 @@ export function SettingsPage() {
                 {PERSONAS[persona].label} Preview
               </CardTitle>
               <p className="text-xs text-text-muted mt-1">
-                {scriptSource === 'gemini'
-                  ? 'With Gemini AI selected, actual messages will vary. These are fallback examples.'
+                {scriptSource === 'gemini' || scriptSource === 'amd'
+                  ? 'With AI selected, actual messages will vary. These are fallback examples.'
                   : "Here's what your coach will say at each level."}
               </p>
             </CardHeader>
@@ -836,6 +867,47 @@ export function SettingsPage() {
 
               <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
                 <p className="text-[10px] text-text-muted uppercase tracking-wider">
+                  AMD Cloud Endpoint
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  <input
+                    type="text"
+                    value={amdEndpointUrlDraft}
+                    onChange={(e) => setAmdEndpointUrlDraft(e.target.value)}
+                    placeholder="http://<ip>:8090"
+                    spellCheck={false}
+                    className="w-full bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/40"
+                  />
+                  <div className="flex gap-1.5">
+                    <input
+                      type="password"
+                      value={amdApiKeyDraft}
+                      onChange={(e) => setAmdApiKeyDraft(e.target.value)}
+                      placeholder="API key (optional)"
+                      spellCheck={false}
+                      className="flex-1 bg-[var(--color-glass-well)] border border-white/[0.06] rounded-md px-2 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/40"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={saveAmdSettings}
+                      disabled={savingAmdSettings}
+                      className="text-xs"
+                    >
+                      {savingAmdSettings ? '...' : 'Save'}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-[10px] text-text-muted">
+                  {amdConfigured ? 'AMD Cloud endpoint configured.' : 'Enter a vLLM endpoint URL to enable.'}
+                </p>
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  Llama 3.1 on AMD Instinct GPUs via vLLM. Open-source model, full data privacy.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-white/[0.05] bg-[var(--color-glass-well)] p-2.5 space-y-1.5">
+                <p className="text-[10px] text-text-muted uppercase tracking-wider">
                   Script Source
                 </p>
                 <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-glass-well)] border border-white/[0.05]">
@@ -863,11 +935,26 @@ export function SettingsPage() {
                   >
                     Gemini AI
                   </button>
+                  <button
+                    onClick={() => updateScriptSource('amd')}
+                    disabled={!amdConfigured}
+                    className={cn(
+                      'flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all',
+                      scriptSource === 'amd'
+                        ? 'bg-primary/20 text-primary border border-primary/30'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.03]',
+                      !amdConfigured && 'opacity-40 cursor-not-allowed'
+                    )}
+                  >
+                    AMD Cloud
+                  </button>
                 </div>
                 <p className="text-[10px] text-text-muted">
                   {scriptSource === 'default'
                     ? 'Free, on-device scripts that name what you\'re doing.'
-                    : 'AI-generated scripts (uses Gemini API tokens).'}
+                    : scriptSource === 'gemini'
+                      ? 'AI-generated scripts (uses Gemini API tokens).'
+                      : 'Llama 3.1 on AMD Instinct MI300X GPUs — open-source, private AI.'}
                 </p>
               </div>
             </CardContent>
