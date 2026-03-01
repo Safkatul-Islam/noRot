@@ -12,9 +12,11 @@ import { VoiceService } from '../services/voice/voice-service';
 export function useVoice() {
   const serviceRef = useRef<VoiceService | null>(null);
   const shownToastRef = useRef(false);
+  const shownMutedToastRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const settingsMuted = useSettingsStore((s) => s.muted);
   const ttsEngine = useSettingsStore((s) => s.ttsEngine);
+  const toughLoveExplicitAllowed = useSettingsStore((s) => s.toughLoveExplicitAllowed);
   const snoozedUntil = useSnoozeStore((s) => s.snoozedUntil);
   const snoozeActive = typeof snoozedUntil === 'number' && snoozedUntil > Date.now();
   const muted = settingsMuted || snoozeActive;
@@ -23,6 +25,21 @@ export function useVoice() {
     const voice = new VoiceService();
     serviceRef.current = voice;
     voice.setTtsEngine(ttsEngine);
+    voice.setToughLoveExplicitAllowed(toughLoveExplicitAllowed);
+
+    // Best-effort prime immediately (Electron often allows this without gesture).
+    // Still keep the user-gesture unlock as a fallback for stricter Chromium policies.
+    voice.getPlayer().prime().catch(() => {});
+
+    // Prime/unlock the voice AudioContext on the first user gesture so
+    // interventions can play audio even when triggered asynchronously (IPC).
+    const unlock = () => {
+      voice.getPlayer().prime().catch((err) => {
+        console.warn('[voice] Audio prime/unlock failed:', err);
+      });
+    };
+    window.addEventListener('pointerdown', unlock, { capture: true, once: true });
+    window.addEventListener('keydown', unlock, { capture: true, once: true });
 
     // Expose analyser getter to store so VoiceOrb can read it
     useVoiceStatusStore.getState().setAnalyserGetter(() => voice.getAnalyser());
@@ -65,7 +82,8 @@ export function useVoice() {
         heartbeat;
 
       if (shouldBroadcast) {
-        window.norot?.broadcastVoiceStatus?.(speaking, severity, amplitude);
+        const lastWordBoundaryAt = useVoiceStatusStore.getState().lastWordBoundaryAt;
+        window.norot?.broadcastVoiceStatus?.(speaking, severity, amplitude, lastWordBoundaryAt);
         lastBroadcastAt = now;
       }
 
@@ -75,7 +93,40 @@ export function useVoice() {
 
     const api = getNorotAPI();
     const unsubscribe = api.onPlayAudio(async (data: ScoreResponse) => {
-      const result = await voice.speak(data);
+      const nowSnoozedUntil = useSnoozeStore.getState().snoozedUntil;
+      const nowSnoozeActive = typeof nowSnoozedUntil === 'number' && nowSnoozedUntil > Date.now();
+      const nowSettingsMuted = useSettingsStore.getState().muted;
+      const nowMuted = nowSnoozeActive || nowSettingsMuted;
+
+      if (nowMuted) {
+        if (!shownMutedToastRef.current) {
+          if (nowSnoozeActive) {
+            toast.info('Voice is snoozed (muted temporarily).', {
+              action: {
+                label: 'Cancel snooze',
+                onClick: () => useSnoozeStore.getState().cancelSnooze(),
+              },
+            });
+          } else {
+            toast.info('Voice is muted in Settings.', {
+              action: {
+                label: 'Unmute',
+                onClick: () => {
+                  const store = useSettingsStore.getState();
+                  if (store.muted) store.toggleMute();
+                  getNorotAPI().updateSettings({ muted: false }).catch(() => {});
+                },
+              },
+            });
+          }
+          shownMutedToastRef.current = true;
+        }
+        return;
+      }
+
+      const result = await voice.speak(data, () => {
+        useVoiceStatusStore.getState().triggerWordBoundary();
+      });
       console.log('[voice] speak result: source=%s severity=%s error=%s errorCode=%s',
         result.source, data.severity, result.error ?? 'none', result.errorCode ?? 'none');
 
@@ -123,6 +174,9 @@ export function useVoice() {
     return () => {
       clearInterval(interval);
       if (typeof unsubscribe === 'function') unsubscribe();
+      // Event listeners are `once: true`, so they should be gone, but remove defensively.
+      window.removeEventListener('pointerdown', unlock, true);
+      window.removeEventListener('keydown', unlock, true);
       voice.stop();
       voice.getPlayer().dispose();
       serviceRef.current = null;
@@ -139,6 +193,10 @@ export function useVoice() {
   useEffect(() => {
     serviceRef.current?.setTtsEngine(ttsEngine);
   }, [ttsEngine]);
+
+  useEffect(() => {
+    serviceRef.current?.setToughLoveExplicitAllowed(toughLoveExplicitAllowed);
+  }, [toughLoveExplicitAllowed]);
 
   const mute = useCallback(() => {
     serviceRef.current?.mute();

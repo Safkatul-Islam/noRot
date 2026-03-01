@@ -17,7 +17,7 @@ export function ContinuePromptPage({
   onStartFresh,
 }: ContinuePromptPageProps) {
   const [showConfirm, setShowConfirm] = useState(false);
-  const { todos, handleToggle, handleDelete, handleAdd } = useTodos();
+  const { todos, handleToggle, handleDelete, handleAdd, handleUpdate } = useTodos();
   const hasTodos = todos.length > 0;
   const doneCount = todos.filter(t => t.done).length;
 
@@ -34,12 +34,12 @@ export function ContinuePromptPage({
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
         transition={{ duration: 0.4, ease: 'easeOut' }}
         className={cn(
-          'w-full flex gap-4 items-start justify-center',
-          hasTodos ? 'max-w-2xl' : 'max-w-md',
+          'w-full flex flex-col md:flex-row gap-4 items-stretch md:items-start justify-center',
+          'max-w-2xl',
         )}
       >
         {/* Left: Welcome card */}
-        <GlassCard className="px-0 flex-1 self-center">
+        <GlassCard className="px-0 flex-1 self-stretch md:self-center">
           <div className="flex flex-col items-center text-center gap-5 px-8 justify-center h-full">
             <h1 className="text-2xl font-bold text-text-primary tracking-tight">
               Welcome back!
@@ -112,28 +112,35 @@ export function ContinuePromptPage({
         </GlassCard>
 
         {/* Right: Editable task panel */}
-        {hasTodos && (
-          <GlassCard className="w-[300px] shrink-0 p-0 max-h-[70vh] overflow-hidden flex flex-col">
-            <div className="shrink-0 px-4 py-3 border-b border-white/[0.06]">
-              <div className="flex items-center gap-2">
-                <ListTodo className="size-4 text-primary" />
-                <span className="text-sm font-medium text-text-primary">Your tasks</span>
-              </div>
-              <p className="mt-1 text-[11px] text-text-secondary/70">
-                {doneCount}/{todos.length} completed &middot; edit or add below
-              </p>
+        <GlassCard className="w-full md:w-[300px] shrink-0 p-0 max-h-[70vh] overflow-hidden flex flex-col">
+          <div className="shrink-0 px-4 py-3 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2">
+              <ListTodo className="size-4 text-primary" />
+              <span className="text-sm font-medium text-text-primary">
+                {hasTodos ? 'Your tasks' : 'Plan your focus'}
+              </span>
             </div>
-            <div className="flex-1 overflow-y-auto min-h-0 px-3 py-2">
-              <TodoItemList
-                todos={todos}
-                onToggle={handleToggle}
-                onDelete={handleDelete}
-                onAdd={handleAdd}
-                showAddInput={true}
-              />
-            </div>
-          </GlassCard>
-        )}
+            <p className="mt-1 text-[11px] text-text-secondary/70">
+              {hasTodos ? (
+                <>
+                  {doneCount}/{todos.length} completed &middot; edit or add below
+                </>
+              ) : (
+                'Adding even one task helps noRot keep you on track'
+              )}
+            </p>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-0 px-3 py-2">
+            <TodoItemList
+              todos={todos}
+              onToggle={handleToggle}
+              onDelete={handleDelete}
+              onAdd={handleAdd}
+              onUpdate={handleUpdate}
+              showAddInput={true}
+            />
+          </div>
+        </GlassCard>
       </motion.div>
       </div>
     </div>

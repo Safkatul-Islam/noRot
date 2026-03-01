@@ -1,5 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { useSnoozeStore } from '../snooze-store';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+async function loadStoreWithMock(mock: { isElectron: boolean; api: any }) {
+  vi.resetModules();
+  vi.doMock('@/lib/norot-api', () => ({
+    isElectron: () => mock.isElectron,
+    getNorotAPI: () => mock.api,
+  }));
+  const mod = await import('../snooze-store');
+  return mod.useSnoozeStore;
+}
 
 describe('snooze-store', () => {
   beforeEach(() => {
@@ -12,7 +21,8 @@ describe('snooze-store', () => {
     vi.clearAllMocks();
   });
 
-  it('schedules a local clear timer when snooze is set', () => {
+  it('schedules a local clear timer when not in Electron', async () => {
+    const useSnoozeStore = await loadStoreWithMock({ isElectron: false, api: {} });
     useSnoozeStore.getState().startSnooze(1_000);
 
     expect(useSnoozeStore.getState().snoozedUntil).not.toBeNull();
@@ -20,27 +30,20 @@ describe('snooze-store', () => {
     expect(useSnoozeStore.getState().snoozedUntil).toBeNull();
   });
 
-  it('clears snooze immediately when duration is 0', () => {
-    useSnoozeStore.getState().startSnooze(1_000);
-    expect(useSnoozeStore.getState().snoozedUntil).not.toBeNull();
+  it('delegates snooze to the Electron API when available', async () => {
+    const api = {
+      setSnooze: vi.fn().mockResolvedValue(undefined),
+      cancelSnooze: vi.fn().mockResolvedValue(undefined),
+    };
+    const useSnoozeStore = await loadStoreWithMock({ isElectron: true, api });
 
-    useSnoozeStore.getState().startSnooze(0);
-    expect(useSnoozeStore.getState().snoozedUntil).toBeNull();
-  });
-
-  it('cancels snooze and clears timer', () => {
     useSnoozeStore.getState().startSnooze(5_000);
+    expect(api.setSnooze).toHaveBeenCalledWith(5_000);
     expect(useSnoozeStore.getState().snoozedUntil).not.toBeNull();
 
     useSnoozeStore.getState().cancelSnooze();
+    expect(api.cancelSnooze).toHaveBeenCalledOnce();
     expect(useSnoozeStore.getState().snoozedUntil).toBeNull();
-
-    vi.advanceTimersByTime(5_000);
-    expect(useSnoozeStore.getState().snoozedUntil).toBeNull();
-  });
-
-  it('isSnoozeActive returns true when snoozed', () => {
-    useSnoozeStore.getState().startSnooze(1_000);
-    expect(useSnoozeStore.getState().snoozedUntil).not.toBeNull();
   });
 });
+

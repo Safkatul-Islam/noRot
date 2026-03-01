@@ -1,16 +1,19 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { X, Plus, Trash2, Play, Hourglass, Flag } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatDurationMinutes, formatTimeOfDay } from '@/lib/time-utils';
+import type { TimeFormat } from '@/lib/time-utils';
 import type { TodoItem } from '@norot/shared';
 
 interface TodoPreviewListProps {
   todos: TodoItem[];
   onUpdate: (todos: TodoItem[]) => void;
   itemLayoutIdPrefix?: string;
+  timeFormat?: TimeFormat;
 }
 
-export function TodoPreviewList({ todos, onUpdate, itemLayoutIdPrefix }: TodoPreviewListProps) {
+export function TodoPreviewList({ todos, onUpdate, itemLayoutIdPrefix, timeFormat = '12h' }: TodoPreviewListProps) {
   const [newTaskText, setNewTaskText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -121,8 +124,8 @@ export function TodoPreviewList({ todos, onUpdate, itemLayoutIdPrefix }: TodoPre
             'bg-[var(--color-glass-well)] border border-white/[0.06]',
           )}
         >
+          {/* Row 1: Task name + delete button */}
           <div className="flex items-center gap-2">
-            {/* Task text — click to edit */}
             {editingId === todo.id ? (
               <input
                 value={editText}
@@ -146,123 +149,145 @@ export function TodoPreviewList({ todos, onUpdate, itemLayoutIdPrefix }: TodoPre
                 {todo.text}
               </span>
             )}
-            <div className="shrink-0 flex flex-wrap items-center gap-1">
-              {/* Start time */}
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-text-muted border border-white/10">
-                Start
-              </span>
-              <input
-                type="time"
-                value={todo.startTime ?? ''}
-                onChange={(e) => handleStartTimeChange(todo.id, e.target.value)}
-                className={cn(
-                  'w-[104px] bg-transparent text-xs text-text-muted',
-                  'border border-white/10 rounded px-2 py-1',
-                  'focus:outline-none focus:border-primary/40',
-                  todo.startTime ? 'text-text-primary' : '',
-                )}
-                title="Start time"
-              />
-
-              {/* Duration */}
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-text-muted border border-white/10">
-                Dur
-              </span>
-              {!todo.durationMinutes && (
-                <>
-                  {[30, 60, 120].map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => handleDurationChange(todo.id, m)}
-                      className={cn(
-                        'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
-                        'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
-                      )}
-                      title={`Set duration to ${m} minutes`}
-                    >
-                      {m === 60 ? '1h' : m === 120 ? '2h' : `${m}m`}
-                    </button>
-                  ))}
-                </>
-              )}
-              <input
-                type="number"
-                min={5}
-                step={5}
-                value={todo.durationMinutes ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  if (!raw) {
-                    handleDurationChange(todo.id, undefined);
-                    return;
-                  }
-                  const parsed = Number(raw);
-                  if (!Number.isFinite(parsed) || parsed <= 0) {
-                    handleDurationChange(todo.id, undefined);
-                    return;
-                  }
-                  handleDurationChange(todo.id, Math.trunc(parsed));
-                }}
-                placeholder="min"
-                className={cn(
-                  'w-[64px] bg-transparent text-xs text-text-muted',
-                  'border border-white/10 rounded px-2 py-1',
-                  'focus:outline-none focus:border-primary/40',
-                  typeof todo.durationMinutes === 'number' ? 'text-text-primary' : '',
-                )}
-                title="Duration (minutes)"
-              />
-
-              {/* Due time (deadline) */}
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-text-muted border border-white/10">
-                Due
-              </span>
-              {!todo.deadline && (
-                <>
-                  {[1, 2].map((h) => (
-                    <button
-                      key={h}
-                      onClick={() => setDeadlinePreset(todo.id, h)}
-                      className={cn(
-                        'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
-                        'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
-                      )}
-                      title={`Set deadline to ${h} hours from now`}
-                    >
-                      {h}h
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => handleDeadlineChange(todo.id, '17:00')}
-                    className={cn(
-                      'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
-                      'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
-                    )}
-                    title="Set deadline to 5pm"
-                  >
-                    5pm
-                  </button>
-                </>
-              )}
-              <input
-                type="time"
-                value={todo.deadline ?? ''}
-                onChange={(e) => handleDeadlineChange(todo.id, e.target.value)}
-                className={cn(
-                  'w-[104px] bg-transparent text-xs text-text-muted',
-                  'border border-white/10 rounded px-2 py-1',
-                  'focus:outline-none focus:border-primary/40',
-                  todo.deadline ? 'text-text-primary' : '',
-                )}
-                title="Deadline"
-              />
-            </div>
             <button
               onClick={() => handleDelete(todo.id)}
               className="shrink-0 p-1 text-text-muted hover:text-red-400 transition-colors"
             >
               <Trash2 className="size-3.5" />
             </button>
+          </div>
+
+          {/* Row 2: Time controls (Start, Dur, Due) */}
+          <div className="flex flex-wrap items-center gap-1">
+            {/* Start time */}
+            {todo.startTime ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
+                <Play className="size-2.5" />
+                {formatTimeOfDay(todo.startTime, timeFormat)}
+                <button
+                  onClick={() => handleStartTimeChange(todo.id, '')}
+                  className="ml-0.5 hover:text-red-400 transition-colors"
+                  title="Clear start time"
+                >
+                  <X className="size-2.5" />
+                </button>
+              </span>
+            ) : (
+              <input
+                type="time"
+                value=""
+                onChange={(e) => handleStartTimeChange(todo.id, e.target.value)}
+                className={cn(
+                  'w-[104px] bg-transparent text-xs text-text-muted',
+                  'border border-white/10 rounded px-2 py-1',
+                  'focus:outline-none focus:border-primary/40',
+                )}
+                title="Set start time"
+              />
+            )}
+
+            {/* Duration */}
+            {typeof todo.durationMinutes === 'number' && todo.durationMinutes > 0 ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
+                <Hourglass className="size-2.5" />
+                {formatDurationMinutes(todo.durationMinutes)}
+                <button
+                  onClick={() => handleDurationChange(todo.id, undefined)}
+                  className="ml-0.5 hover:text-red-400 transition-colors"
+                  title="Clear duration"
+                >
+                  <X className="size-2.5" />
+                </button>
+              </span>
+            ) : (
+              <>
+                {[30, 60, 120].map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => handleDurationChange(todo.id, m)}
+                    className={cn(
+                      'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                      'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                    )}
+                    title={`Set duration to ${m} minutes`}
+                  >
+                    {m === 60 ? '1h' : m === 120 ? '2h' : `${m}m`}
+                  </button>
+                ))}
+                <input
+                  type="number"
+                  min={5}
+                  step={5}
+                  value=""
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (!raw) return;
+                    const parsed = Number(raw);
+                    if (!Number.isFinite(parsed) || parsed <= 0) return;
+                    handleDurationChange(todo.id, Math.trunc(parsed));
+                  }}
+                  placeholder="min"
+                  className={cn(
+                    'w-[64px] bg-transparent text-xs text-text-muted',
+                    'border border-white/10 rounded px-2 py-1',
+                    'focus:outline-none focus:border-primary/40',
+                  )}
+                  title="Duration (minutes)"
+                />
+              </>
+            )}
+
+            {/* Due time (deadline) */}
+            {todo.deadline ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
+                <Flag className="size-2.5" />
+                {formatTimeOfDay(todo.deadline, timeFormat)}
+                <button
+                  onClick={() => handleDeadlineChange(todo.id, '')}
+                  className="ml-0.5 hover:text-red-400 transition-colors"
+                  title="Clear deadline"
+                >
+                  <X className="size-2.5" />
+                </button>
+              </span>
+            ) : (
+              <>
+                {[1, 2].map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => setDeadlinePreset(todo.id, h)}
+                    className={cn(
+                      'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                      'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                    )}
+                    title={`Set deadline to ${h} hours from now`}
+                  >
+                    {h}h
+                  </button>
+                ))}
+                <button
+                  onClick={() => handleDeadlineChange(todo.id, '17:00')}
+                  className={cn(
+                    'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                    'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                  )}
+                  title="Set deadline to 5pm"
+                >
+                  5pm
+                </button>
+                <input
+                  type="time"
+                  value=""
+                  onChange={(e) => handleDeadlineChange(todo.id, e.target.value)}
+                  className={cn(
+                    'w-[104px] bg-transparent text-xs text-text-muted',
+                    'border border-white/10 rounded px-2 py-1',
+                    'focus:outline-none focus:border-primary/40',
+                  )}
+                  title="Set deadline"
+                />
+              </>
+            )}
           </div>
 
           {/* Allowed apps chips */}

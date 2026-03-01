@@ -12,13 +12,13 @@ import { Button } from '@/components/ui/button';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { ShineBorder } from '@/components/effects/ShineBorder';
 import { Meteors } from '@/components/effects/Meteors';
-import { ShimmerButton } from '@/components/effects/ShimmerButton';
 import type { InterventionEvent } from '@norot/shared';
 import { SEVERITY_BANDS, stripEmotionTags } from '@norot/shared';
 import { getNorotAPI } from '@/lib/norot-api';
 import { useVoiceChatStore } from '@/stores/voice-chat-store';
+import { useSnoozeStore } from '@/stores/snooze-store';
 import { toast } from 'sonner';
-import { Clock, X, Briefcase, HelpCircle } from 'lucide-react';
+import { Clock, X, HelpCircle } from 'lucide-react';
 
 interface InterventionDialogProps {
   intervention: InterventionEvent | null;
@@ -39,6 +39,13 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
   const isHighSeverity = intervention !== null && intervention.severity >= 3;
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
 
+  const startSnooze = useSnoozeStore((s) => s.startSnooze);
+  const handleSnooze5Min = () => {
+    if (!intervention) return;
+    startSnooze(5 * 60 * 1000);
+    onRespond(intervention.id, 'snoozed');
+  };
+
   // Check for ElevenLabs key when dialog opens
   useEffect(() => {
     if (open) {
@@ -54,7 +61,7 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
         <Button
           variant="outline"
           className="border-warning text-warning hover:bg-warning/10"
-          onClick={() => onRespond(intervention.id, 'snoozed')}
+          onClick={handleSnooze5Min}
         >
           <Clock className="size-4 mr-1" />
           Snooze 5 min
@@ -69,7 +76,7 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
         </Button>
         <Button
           variant="outline"
-          className="border-primary text-primary hover:bg-primary/10"
+          className="border-primary text-primary hover:bg-primary/10 col-span-2"
           onClick={() => {
             if (!intervention) return;
             if (!hasElevenLabsKey) {
@@ -84,10 +91,6 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
           <HelpCircle className="size-4 mr-1" />
           I'm stuck
         </Button>
-        <ShimmerButton shimmerColor="#22c55e" className="w-full" onClick={() => onRespond(intervention.id, 'working')}>
-          <Briefcase className="size-4" />
-          I'm working!
-        </ShimmerButton>
       </div>
     </DialogFooter>
   ) : null;
@@ -97,7 +100,7 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
       <Button
         variant="outline"
         className="flex-1 border-warning text-warning hover:bg-warning/10"
-        onClick={() => onRespond(intervention.id, 'snoozed')}
+        onClick={handleSnooze5Min}
       >
         <Clock className="size-4 mr-1" />
         Snooze 5 min
@@ -110,10 +113,6 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
         <X className="size-4 mr-1" />
         Dismiss
       </Button>
-      <ShimmerButton shimmerColor="#22c55e" className="flex-1" onClick={() => onRespond(intervention.id, 'working')}>
-        <Briefcase className="size-4" />
-        I'm working!
-      </ShimmerButton>
     </DialogFooter>
   ) : null;
 

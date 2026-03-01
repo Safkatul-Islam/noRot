@@ -51,3 +51,4 @@ describe('snooze-state', () => {
     expect(getSnoozedUntil()).toBeNull();
   });
 });
+

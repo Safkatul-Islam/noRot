@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X } from 'lucide-react';
 import { TodoItemList } from '@/components/TodoItemList';
+import { VoiceOrb } from '@/components/VoiceOrb';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { getNorotAPI } from '@/lib/norot-api';
 import { cn } from '@/lib/utils';
+import { useVoiceStatusStore } from '@/stores/voice-status-store';
+import { useScoreStore } from '@/stores/score-store';
 import type { TodoItem } from '@norot/shared';
+import type { Severity } from '@norot/shared';
 
 export function TodoOverlayPage() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [hasKey, setHasKey] = useState(false);
 
   const loadTodos = useCallback(async () => {
     try {
@@ -25,8 +30,22 @@ export function TodoOverlayPage() {
     const api = getNorotAPI();
     const unsubTodos = api.onTodosUpdated((updated) => setTodos(updated));
 
+    // Check if ElevenLabs API key is configured
+    api.hasElevenLabsKey?.().then(setHasKey).catch(() => {});
+
+    // Listen for voice status broadcasts from main window
+    const unsubVoice = api.onVoiceStatus?.((data: { isSpeaking: boolean; severity: number; amplitude: number; lastWordBoundaryAt: number }) => {
+      useVoiceStatusStore.getState().setIsSpeaking(data.isSpeaking);
+      useVoiceStatusStore.getState().setAmplitude(data.amplitude);
+      useScoreStore.getState().setSeverity(data.severity as Severity);
+      if (data.lastWordBoundaryAt > 0) {
+        useVoiceStatusStore.setState({ lastWordBoundaryAt: data.lastWordBoundaryAt });
+      }
+    });
+
     return () => {
       unsubTodos();
+      unsubVoice?.();
     };
   }, [loadTodos]);
 
@@ -52,8 +71,16 @@ export function TodoOverlayPage() {
     } catch { /* ignore */ }
   };
 
-  const handleClose = async () => {
-    try { await getNorotAPI().closeTodoOverlay(); } catch { /* ignore */ }
+  const handleUpdate = async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
+    try {
+      await getNorotAPI().updateTodo(id, fields);
+    } catch { /* ignore */ }
+  };
+
+  const handleOrbClick = () => {
+    if (hasKey) {
+      getNorotAPI().openVoiceChat();
+    }
   };
 
   return (
@@ -66,21 +93,10 @@ export function TodoOverlayPage() {
       >
         {/* Drag bar */}
         <div
-          className="h-8 shrink-0 flex items-center justify-between px-3"
+          className="h-8 shrink-0 flex items-center px-3"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <span className="text-xs font-medium text-text-secondary">Todo</span>
-          <button
-            onClick={handleClose}
-            className={cn(
-              'w-5 h-5 rounded flex items-center justify-center',
-              'text-text-muted hover:text-text-primary hover:bg-white/[0.06]',
-              'transition-colors duration-200',
-            )}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
-            <X className="size-3" />
-          </button>
         </div>
 
         {/* Todo list */}
@@ -91,9 +107,30 @@ export function TodoOverlayPage() {
               onToggle={handleToggle}
               onDelete={handleDelete}
               onAdd={handleAdd}
+              onUpdate={handleUpdate}
+              enableAppDropdown={false}
             />
           </div>
         </ScrollArea>
+
+        {/* Voice orb bottom bar */}
+        <div className="shrink-0 h-[100px] flex items-center justify-center border-t border-white/[0.06] overflow-visible">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="w-[140px] h-[140px] -mt-[20px] cursor-pointer"
+                onClick={handleOrbClick}
+              >
+                <VoiceOrb detail={10} />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={-12}>
+              {hasKey
+                ? 'Click to talk to noRot'
+                : 'Add your ElevenLabs API key in Settings to chat with noRot'}
+            </TooltipContent>
+          </Tooltip>
+        </div>
 
       </div>
     </div>

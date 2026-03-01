@@ -1,17 +1,206 @@
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource-variable/manrope';
 @import "tailwindcss";
+@import "tw-animate-css";
 
-:root {
-  --accent: 210 100% 60%;
+@theme {
+  /* Base palette — Dark Precision: true dark zinc tones */
+  --color-background: #09090b;
+  --color-surface: #111113;
+  --color-surface-hover: #1a1a1f;
+  --color-border: #27272a;
+  --color-border-hover: #3f3f46;
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #52525b;
+  --color-foreground: var(--color-text-primary);
+
+  /* Accent — default violet, overridden at runtime by useAccentColor */
+  --color-primary: #8b5cf6;
+  --color-primary-hover: #a78bfa;
+  --color-primary-foreground: #f9fafb;
+
+  /* Semantic status colors */
+  --color-warning: #f97316;
+  --color-danger: #ef4444;
+  --color-success: #22c55e;
+  --color-crisis: #a855f7;
+  --color-destructive: var(--color-danger);
+  --color-destructive-foreground: #f9fafb;
+
+  /* shadcn compatibility mappings */
+  --color-card: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  --color-card-foreground: var(--color-text-primary);
+  --color-popover: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  --color-popover-foreground: var(--color-text-primary);
+  --color-secondary: color-mix(in srgb, var(--color-surface-hover) 82%, black);
+  --color-secondary-foreground: var(--color-text-primary);
+  --color-muted: color-mix(in srgb, var(--color-surface-hover) 74%, black);
+  --color-muted-foreground: var(--color-text-secondary);
+  --color-accent: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  --color-accent-foreground: var(--color-text-primary);
+  --color-input: color-mix(in srgb, var(--color-border) 80%, black);
+  --color-ring: var(--color-primary);
+
+  /* Glow tokens */
+  --color-glow-primary: rgba(139, 92, 246, 0.5);
+  --color-glow-warning: rgba(249, 115, 22, 0.5);
+  --color-glow-danger: rgba(239, 68, 68, 0.5);
+  --color-glow-crisis: rgba(168, 85, 247, 0.5);
+  --color-glow-success: rgba(34, 197, 94, 0.5);
+
+  /*
+   * Glass tiers — paired with backdrop-blur + saturate for real optical depth.
+   *
+   *   well   (0.38): ambient/decorative — ether bleeds through, heavy blur.
+   *   default(0.60): standard cards — frosted, readable.
+   *   dense  (0.78): data-heavy areas — crisp text, minimal ether bleed.
+   */
+  --color-glass: rgba(17, 17, 19, 0.60);
+  --color-glass-well: rgba(17, 17, 19, 0.38);
+  --color-glass-dense: rgba(17, 17, 19, 0.78);
+  --color-glass-border: rgba(255, 255, 255, 0.08);
+
+  /* Animation tokens */
+  --animate-aurora: aurora 4s linear infinite;
+  --animate-meteor: meteor 3s linear infinite;
+  --animate-shimmer-slide: shimmer-slide 2s ease-in-out infinite;
+  --animate-spin-around: spin-around 3s linear infinite;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+  --animate-breathe: breathe 4s ease-in-out infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-border-flow: border-flow 4s linear infinite;
 }
 
-html,
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  height: 100%;
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: 'Space Grotesk Variable', 'Manrope Variable', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
-    "Segoe UI Emoji";
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-hover);
 }
 
+/* ── Keyframes ──────────────────────────────────────────── */
+
+@keyframes aurora {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+@keyframes meteor {
+  0% { transform: translateX(0) translateY(0) rotate(215deg); opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translateX(-500px) translateY(500px) rotate(215deg); opacity: 0; }
+}
+
+@keyframes shimmer-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes spin-around {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px var(--color-glow-primary),
+      0 0 10px color-mix(in srgb, var(--color-primary) 15%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 15px var(--color-glow-primary),
+      0 0 30px color-mix(in srgb, var(--color-primary) 25%, transparent);
+  }
+}
+
+/* Gentle scale pulse for hero elements */
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.005); }
+}
+
+/* Slow vertical drift for floating elements */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* Voice orb breathing pulse for local TTS fallback (no analyser) */
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+/* Gradient shimmer traveling along a border/edge */
+@keyframes border-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* Slow ring rotation for the score orb outer track */
+@keyframes orbit-slow {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Bouncing dots for chat typing indicator */
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+/* ── Reduced motion ─────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Custom slider styling ──────────────────────────────── */
+
+/* Radix slider track — gradient from cool to warm */
+[data-slot="slider"] [data-orientation="horizontal"] [data-slot="slider-track"] {
+  background: linear-gradient(to right, var(--color-primary), var(--color-warning)) !important;
+  opacity: 0.35;
+}
+[data-slot="slider"] [data-orientation="horizontal"] [data-slot="slider-range"] {
+  background: linear-gradient(to right, var(--color-primary), var(--color-primary-hover)) !important;
+  opacity: 1;
+}
+[data-slot="slider"] [data-slot="slider-thumb"] {
+  box-shadow: 0 0 10px var(--color-glow-primary), 0 0 4px var(--color-glow-primary) !important;
+  border-color: var(--color-primary) !important;
+}

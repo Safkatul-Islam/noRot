@@ -1,216 +1,138 @@
-import { create } from 'zustand'
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import type { Persona } from '@norot/shared';
+import { FREQUENCY_PRESETS, DEFAULT_FREQUENCY } from '@/lib/frequency-presets';
+import type { FrequencyLevel } from '@/lib/frequency-presets';
 
-import type { PersonaId } from '@norot/shared'
+export type AccentColorId = 'violet' | 'indigo' | 'blue' | 'cyan' | 'emerald' | 'rose' | 'amber';
 
-import { IPC_CHANNELS } from '../ipc-channels'
-
-export type ScriptSource = 'default' | 'gemini'
-export type TtsEngine = 'auto' | 'elevenlabs' | 'local'
-
-export interface CategoryRule {
-  matchType: 'app' | 'title'
-  pattern: string
-  category: 'productive' | 'neutral' | 'social' | 'entertainment' | 'unknown'
+export interface AccentColorPreset {
+  id: AccentColorId;
+  label: string;
+  primary: string;
+  primaryHover: string;
+  glow: string;
+  /** Colors for the Liquid Ether background (3 stops) */
+  etherColors: [string, string, string];
 }
 
-export interface WorkOverride {
-  app?: string
-  domain?: string
-  untilTs: number
-}
-
-export interface DesktopSettings {
-  onboardingComplete: boolean
-  monitoringEnabled: boolean
-  dailySetupDate: string | null
-  autoShowTodoOverlay: boolean
-  apiUrl: string
-  persona: PersonaId
-  toughLoveEnabled: boolean
-  scoreThreshold: number
-  cooldownSeconds: number
-  scriptSource: ScriptSource
-  geminiKey: string
-  elevenLabsApiKey: string
-  voiceAgentId: string
-  checkinAgentId: string
-  visionEnabled: boolean
-  muted: boolean
-  ttsEngine: TtsEngine
-  categoryRules: CategoryRule[]
-  workOverrides: WorkOverride[]
-  refocusCountDate: string | null
-  refocusCount: number
-}
-
-export interface UpdateSettingsError {
-  code: string
-  message: string
-}
-
-export interface UpdateSettingsResult {
-  ok: boolean
-  error?: UpdateSettingsError
-}
-
-const DEFAULTS: DesktopSettings = {
-  onboardingComplete: false,
-  monitoringEnabled: true,
-  dailySetupDate: null,
-  autoShowTodoOverlay: true,
-  apiUrl: 'http://localhost:8000',
-  persona: 'calm_friend',
-  toughLoveEnabled: false,
-  scoreThreshold: 70,
-  cooldownSeconds: 180,
-  scriptSource: 'default',
-  geminiKey: '',
-  elevenLabsApiKey: '',
-  voiceAgentId: '',
-  checkinAgentId: '',
-  visionEnabled: false,
-  muted: false,
-  ttsEngine: 'auto',
-  categoryRules: [],
-  workOverrides: [],
-  refocusCountDate: null,
-  refocusCount: 0
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function parseBoolean(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: boolean): boolean {
-  const value = raw[key as string]
-  return typeof value === 'boolean' ? value : fallback
-}
-
-function parseNumber(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: number): number {
-  const value = raw[key as string]
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function parseString(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: string): string {
-  const value = raw[key as string]
-  return typeof value === 'string' ? value : fallback
-}
-
-function parseNullableString(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: string | null): string | null {
-  const value = raw[key as string]
-  if (typeof value === 'string') return value
-  if (value === null) return null
-  return fallback
-}
-
-function parsePersona(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: PersonaId): PersonaId {
-  const value = raw[key as string]
-  if (value === 'calm_friend' || value === 'coach' || value === 'tough_love') return value
-  return fallback
-}
-
-function parseScriptSource(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: ScriptSource): ScriptSource {
-  const value = raw[key as string]
-  if (value === 'default' || value === 'gemini') return value
-  return fallback
-}
-
-function parseTtsEngine(raw: Record<string, unknown>, key: keyof DesktopSettings, fallback: TtsEngine): TtsEngine {
-  const value = raw[key as string]
-  if (value === 'auto' || value === 'elevenlabs' || value === 'local') return value
-  return fallback
-}
-
-function parseCategoryRules(value: unknown): CategoryRule[] {
-  if (!Array.isArray(value)) return []
-  const out: CategoryRule[] = []
-  for (const item of value) {
-    if (!isRecord(item)) continue
-    const matchType = item.matchType
-    const pattern = item.pattern
-    const category = item.category
-    if (matchType !== 'app' && matchType !== 'title') continue
-    if (typeof pattern !== 'string') continue
-    if (category !== 'productive' && category !== 'neutral' && category !== 'social' && category !== 'entertainment' && category !== 'unknown') continue
-    out.push({ matchType, pattern, category })
-  }
-  return out
-}
-
-function parseWorkOverrides(value: unknown): WorkOverride[] {
-  if (!Array.isArray(value)) return []
-  const out: WorkOverride[] = []
-  for (const item of value) {
-    if (!isRecord(item)) continue
-    const untilTs = item.untilTs
-    if (typeof untilTs !== 'number' || !Number.isFinite(untilTs)) continue
-    const app = typeof item.app === 'string' ? item.app : undefined
-    const domain = typeof item.domain === 'string' ? item.domain : undefined
-    out.push({ untilTs: Math.trunc(untilTs), app, domain })
-  }
-  return out
-}
-
-function parseSettings(raw: unknown): DesktopSettings {
-  if (!isRecord(raw)) return DEFAULTS
-  return {
-    onboardingComplete: parseBoolean(raw, 'onboardingComplete', DEFAULTS.onboardingComplete),
-    monitoringEnabled: parseBoolean(raw, 'monitoringEnabled', DEFAULTS.monitoringEnabled),
-    dailySetupDate: parseNullableString(raw, 'dailySetupDate', DEFAULTS.dailySetupDate),
-    autoShowTodoOverlay: parseBoolean(raw, 'autoShowTodoOverlay', DEFAULTS.autoShowTodoOverlay),
-    apiUrl: parseString(raw, 'apiUrl', DEFAULTS.apiUrl),
-    persona: parsePersona(raw, 'persona', DEFAULTS.persona),
-    toughLoveEnabled: parseBoolean(raw, 'toughLoveEnabled', DEFAULTS.toughLoveEnabled),
-    scoreThreshold: parseNumber(raw, 'scoreThreshold', DEFAULTS.scoreThreshold),
-    cooldownSeconds: parseNumber(raw, 'cooldownSeconds', DEFAULTS.cooldownSeconds),
-    scriptSource: parseScriptSource(raw, 'scriptSource', DEFAULTS.scriptSource),
-    geminiKey: parseString(raw, 'geminiKey', DEFAULTS.geminiKey),
-    elevenLabsApiKey: parseString(raw, 'elevenLabsApiKey', DEFAULTS.elevenLabsApiKey),
-    voiceAgentId: parseString(raw, 'voiceAgentId', DEFAULTS.voiceAgentId),
-    checkinAgentId: parseString(raw, 'checkinAgentId', DEFAULTS.checkinAgentId),
-    visionEnabled: parseBoolean(raw, 'visionEnabled', DEFAULTS.visionEnabled),
-    muted: parseBoolean(raw, 'muted', DEFAULTS.muted),
-    ttsEngine: parseTtsEngine(raw, 'ttsEngine', DEFAULTS.ttsEngine),
-    categoryRules: parseCategoryRules(raw.categoryRules),
-    workOverrides: parseWorkOverrides(raw.workOverrides),
-    refocusCountDate: parseNullableString(raw, 'refocusCountDate', DEFAULTS.refocusCountDate),
-    refocusCount: parseNumber(raw, 'refocusCount', DEFAULTS.refocusCount)
-  }
-}
-
-interface SettingsStoreState {
-  settings: DesktopSettings | null
-  loading: boolean
-  error: string | null
-  load: () => Promise<void>
-  update: (patch: Partial<DesktopSettings>) => Promise<UpdateSettingsResult>
-}
-
-export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
-  settings: null,
-  loading: false,
-  error: null,
-  load: async () => {
-    set({ loading: true, error: null })
-    try {
-      const raw = await window.norot.invoke<Record<string, unknown>>(IPC_CHANNELS.settings.get)
-      set({ settings: parseSettings(raw), loading: false })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      set({ error: msg, loading: false })
-    }
+export const ACCENT_PRESETS: Record<AccentColorId, AccentColorPreset> = {
+  violet: {
+    id: 'violet',
+    label: 'Violet',
+    primary: '#8b5cf6',
+    primaryHover: '#a78bfa',
+    glow: 'rgba(139,92,246,0.5)',
+    etherColors: ['#5227FF', '#9F7AEA', '#B19EEF'],
   },
-  update: async (patch) => {
-    try {
-      const res = await window.norot.invoke<UpdateSettingsResult>(IPC_CHANNELS.settings.update, patch)
-      if (res && res.ok) {
-        await get().load()
-      }
-      return res ?? { ok: false }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return { ok: false, error: { code: 'ipc_error', message: msg } }
-    }
-  }
-}))
+  indigo: {
+    id: 'indigo',
+    label: 'Indigo',
+    primary: '#6366f1',
+    primaryHover: '#818cf8',
+    glow: 'rgba(99,102,241,0.5)',
+    etherColors: ['#4338CA', '#6366F1', '#A5B4FC'],
+  },
+  blue: {
+    id: 'blue',
+    label: 'Blue',
+    primary: '#3b82f6',
+    primaryHover: '#60a5fa',
+    glow: 'rgba(59,130,246,0.5)',
+    etherColors: ['#1D4ED8', '#3B82F6', '#93C5FD'],
+  },
+  cyan: {
+    id: 'cyan',
+    label: 'Cyan',
+    primary: '#06b6d4',
+    primaryHover: '#22d3ee',
+    glow: 'rgba(6,182,212,0.5)',
+    etherColors: ['#0E7490', '#06B6D4', '#67E8F9'],
+  },
+  emerald: {
+    id: 'emerald',
+    label: 'Emerald',
+    primary: '#10b981',
+    primaryHover: '#34d399',
+    glow: 'rgba(16,185,129,0.5)',
+    etherColors: ['#047857', '#10B981', '#6EE7B7'],
+  },
+  rose: {
+    id: 'rose',
+    label: 'Rose',
+    primary: '#f43f5e',
+    primaryHover: '#fb7185',
+    glow: 'rgba(244,63,94,0.5)',
+    etherColors: ['#BE123C', '#F43F5E', '#FDA4AF'],
+  },
+  amber: {
+    id: 'amber',
+    label: 'Amber',
+    primary: '#f59e0b',
+    primaryHover: '#fbbf24',
+    glow: 'rgba(245,158,11,0.5)',
+    etherColors: ['#B45309', '#F59E0B', '#FDE68A'],
+  },
+};
 
+export const ACCENT_IDS = Object.keys(ACCENT_PRESETS) as AccentColorId[];
+
+interface SettingsState {
+  persona: Persona;
+  scoreThreshold: number;
+  cooldownSeconds: number;
+  interventionFrequency: FrequencyLevel;
+  muted: boolean;
+  ttsEngine: 'auto' | 'elevenlabs' | 'local';
+  toughLoveExplicitAllowed: boolean;
+  accentColor: AccentColorId;
+  hasCompletedOnboarding: boolean;
+  lastDailySetupDate: string;
+  setPersona: (persona: Persona) => void;
+  setThreshold: (threshold: number) => void;
+  setCooldown: (seconds: number) => void;
+  setInterventionFrequency: (level: FrequencyLevel) => void;
+  toggleMute: () => void;
+  setTtsEngine: (engine: 'auto' | 'elevenlabs' | 'local') => void;
+  setToughLoveExplicitAllowed: (allowed: boolean) => void;
+  setAccentColor: (color: AccentColorId) => void;
+  setHasCompletedOnboarding: (val: boolean) => void;
+  setLastDailySetupDate: (date: string) => void;
+}
+
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      persona: 'calm_friend',
+      scoreThreshold: 35,
+      cooldownSeconds: 180,
+      interventionFrequency: DEFAULT_FREQUENCY,
+      muted: false,
+      ttsEngine: 'auto',
+      toughLoveExplicitAllowed: false,
+      accentColor: 'violet',
+      hasCompletedOnboarding: false,
+      lastDailySetupDate: '',
+      setPersona: (persona) => set({ persona }),
+      setThreshold: (scoreThreshold) => set({ scoreThreshold }),
+      setCooldown: (cooldownSeconds) => set({ cooldownSeconds }),
+      setInterventionFrequency: (level) => {
+        const preset = FREQUENCY_PRESETS[level];
+        set({
+          interventionFrequency: level,
+          scoreThreshold: preset.scoreThreshold,
+          cooldownSeconds: preset.cooldownSeconds,
+        });
+      },
+      toggleMute: () => set((state) => ({ muted: !state.muted })),
+      setTtsEngine: (ttsEngine) => set({ ttsEngine }),
+      setToughLoveExplicitAllowed: (toughLoveExplicitAllowed) => set({ toughLoveExplicitAllowed }),
+      setAccentColor: (accentColor) => set({ accentColor }),
+      setHasCompletedOnboarding: (hasCompletedOnboarding) => set({ hasCompletedOnboarding }),
+      setLastDailySetupDate: (lastDailySetupDate) => set({ lastDailySetupDate }),
+    }),
+    {
+      name: 'norot-settings',
+    }
+  )
+);

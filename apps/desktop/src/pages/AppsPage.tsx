@@ -392,4 +392,3 @@ export function AppsPage() {
     </div>
   );
 }
-

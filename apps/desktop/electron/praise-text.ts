@@ -2,20 +2,20 @@ import type { Persona } from '@norot/shared';
 
 const variants: Record<Persona, string[]> = {
   calm_friend: [
-    'Hey — you\'re back above 90. That\'s you taking control. Keep going.',
+    'Hey — you’re back above 90. That’s you taking control. Keep going.',
     'Nice. Focus is up again. Keep it gentle and keep it moving.',
-    'You\'re doing really well right now. Stay with it.',
+    'You’re doing really well right now. Stay with it.',
     'That recovery was solid. Keep building that momentum.',
   ],
   coach: [
     'Good. Focus is back above 90. Keep the streak alive.',
-    'That\'s the standard. Stay locked in.',
+    'That’s the standard. Stay locked in.',
     'Excellent recovery. Keep executing.',
     'This is what disciplined focus looks like. Keep going.',
   ],
   tough_love: [
-    'There we go. Back above 90. Don\'t you dare drift now.',
-    'Good. You remembered who\'s in charge. Keep it up.',
+    'There we go. Back above 90. Don’t you dare drift now.',
+    'Good. You remembered who’s in charge. Keep it up.',
     'Nice recovery. Now keep working — no victory laps.',
     'Finally. Focus is high again. Stay on the task.',
   ],
@@ -36,3 +36,4 @@ export function buildPraiseText(persona: Persona): string {
   const list = variants[persona] ?? variants.calm_friend;
   return pick(`praise:${persona}`, list);
 }
+

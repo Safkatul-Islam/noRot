@@ -176,6 +176,17 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
     setStep(target);
   };
 
+  const handleReturnBack = useCallback(async () => {
+    setDirection(-1);
+    try {
+      await voiceAgent.stopConversation();
+    } catch {
+      // ignore
+    }
+    reset();
+    setManualTodos([]);
+  }, [reset, voiceAgent]);
+
   const handleSelectMode = (mode: 'voice' | 'manual') => {
     setInputMode(mode);
     setIsReviewing(false);
@@ -359,6 +370,18 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
               exit="exit"
               transition={slideTransition}
             >
+              <div className="flex items-center justify-start mb-3">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleReturnBack}
+                  className="gap-1"
+                >
+                  <ChevronLeft className="size-4" />
+                  Return back
+                </Button>
+              </div>
+
               {inputMode === 'manual' ? (
                 <GlassCard className="px-8">
                   <h2 className="text-2xl font-bold text-text-primary tracking-tight text-center">
@@ -451,14 +474,11 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => {
-                                  voiceAgent.stopConversation();
-                                  reset();
-                                }}
+                                onClick={handleReturnBack}
                                 className="gap-1"
                               >
                                 <ChevronLeft className="size-3" />
-                                Go Back
+                                Return back
                               </Button>
                             )}
                             <Button

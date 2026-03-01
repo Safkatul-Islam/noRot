@@ -15,7 +15,6 @@ import { ContinuePromptPage } from '@/pages/ContinuePromptPage';
 import { TodoOverlayPage } from '@/pages/TodoOverlayPage';
 import { InterventionOverlayPage } from '@/pages/InterventionOverlayPage';
 import { CommandPalette } from '@/components/CommandPalette';
-import { InterventionDialog } from '@/components/InterventionDialog';
 import { VoiceChatDialog } from '@/components/VoiceChatDialog';
 import { useScore } from '@/hooks/useScore';
 import { useInterventions } from '@/hooks/useInterventions';
@@ -117,10 +116,6 @@ function AppContent() {
         </motion.div>
       </AnimatePresence>
       <CommandPalette />
-      <InterventionDialog
-        intervention={activeIntervention}
-        onRespond={respondToIntervention}
-      />
       <VoiceChatDialog />
     </DashboardLayout>
   );

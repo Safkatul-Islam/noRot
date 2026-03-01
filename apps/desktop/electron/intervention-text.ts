@@ -262,15 +262,15 @@ export function buildZeroFocusInterventionText(
       todoLines.push(`- "${t}"`);
     }
   } else {
-    todoLines.push('You don\'t even need a perfect plan right now \u2014 you need one real action.');
+    todoLines.push('You don’t even need a perfect plan right now — you need one real action.');
   }
 
   const common = [
     `Your focus score just hit ZERO.`,
     `Right now you are ${target}.`,
     ``,
-    `Here's what that means: you're letting a tiny dopamine loop decide your day.`,
-    `And if you keep letting it drive, the cost is not "5 more minutes" \u2014 it's your entire afternoon.`,
+    `Here’s what that means: you’re letting a tiny dopamine loop decide your day.`,
+    `And if you keep letting it drive, the cost is not “5 more minutes” — it’s your entire afternoon.`,
     ``,
     ...todoLines,
     ``,
@@ -285,11 +285,11 @@ export function buildZeroFocusInterventionText(
   if (persona === 'tough_love') {
     return [
       `STOP.`,
-      `This is not "a break." This is you bleeding time.`,
+      `This is not “a break.” This is you bleeding time.`,
       ``,
       common,
       ``,
-      `I'm disappointed because you're capable of more than this.`,
+      `I’m disappointed because you’re capable of more than this.`,
       `Prove it. Two minutes. Go.`,
     ].join('\n');
   }
@@ -297,20 +297,20 @@ export function buildZeroFocusInterventionText(
   if (persona === 'coach') {
     return [
       `Focus: 0.`,
-      `That's a hard stop.`,
+      `That’s a hard stop.`,
       ``,
       common,
       ``,
-      `You're not stuck. You're just uncommitted to the next action.`,
+      `You’re not stuck. You’re just uncommitted to the next action.`,
       `Commit. Execute. Two minutes.`,
     ].join('\n');
   }
 
   return [
-    `Hey \u2014 I'm not judging you. But this is the moment you need to interrupt.`,
+    `Hey — I’m not judging you. But this is the moment you need to interrupt.`,
     ``,
     common,
     ``,
-    `I'm on your side. Let's get you back into motion.`,
+    `I’m on your side. Let’s get you back into motion.`,
   ].join('\n');
 }

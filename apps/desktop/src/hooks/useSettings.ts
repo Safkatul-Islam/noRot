@@ -42,44 +42,77 @@ export function useSettings() {
   }, []);
 
   const updatePersona = async (p: Persona) => {
+    const prev = persona;
     setPersona(p);
     const api = getNorotAPI();
-    await api.updateSettings({ persona: p });
+    try {
+      await api.updateSettings({ persona: p });
+    } catch (err) {
+      console.error('[useSettings] Failed to update persona, reverting:', err);
+      setPersona(prev);
+    }
   };
 
   const enableExplicitToughLove = async () => {
     setToughLoveExplicitAllowed(true);
     const api = getNorotAPI();
-    await api.updateSettings({ toughLoveExplicitAllowed: true });
+    try {
+      await api.updateSettings({ toughLoveExplicitAllowed: true });
+    } catch (err) {
+      console.error('[useSettings] Failed to enable explicit tough love, reverting:', err);
+      setToughLoveExplicitAllowed(false);
+    }
   };
 
   const updateFrequency = async (level: FrequencyLevel) => {
+    const prev = interventionFrequency;
     const preset = FREQUENCY_PRESETS[level];
     setInterventionFrequency(level);
     const api = getNorotAPI();
-    await api.updateSettings({
-      scoreThreshold: preset.scoreThreshold,
-      cooldownSeconds: preset.cooldownSeconds,
-    });
+    try {
+      await api.updateSettings({
+        scoreThreshold: preset.scoreThreshold,
+        cooldownSeconds: preset.cooldownSeconds,
+      });
+    } catch (err) {
+      console.error('[useSettings] Failed to update frequency, reverting:', err);
+      setInterventionFrequency(prev);
+    }
   };
 
   const updateMuted = async () => {
     toggleMute();
     const api = getNorotAPI();
-    await api.updateSettings({ muted: !muted });
+    try {
+      await api.updateSettings({ muted: !muted });
+    } catch (err) {
+      console.error('[useSettings] Failed to update muted setting, reverting:', err);
+      toggleMute(); // revert optimistic update
+    }
   };
 
   const updateTtsEngine = async (engine: 'auto' | 'elevenlabs' | 'local') => {
+    const prev = ttsEngine;
     setTtsEngine(engine);
     const api = getNorotAPI();
-    await api.updateSettings({ ttsEngine: engine });
+    try {
+      await api.updateSettings({ ttsEngine: engine });
+    } catch (err) {
+      console.error('[useSettings] Failed to update TTS engine, reverting:', err);
+      setTtsEngine(prev);
+    }
   };
 
   // Mark onboarding complete — does NOT start telemetry (that waits for daily setup)
   const completeOnboarding = async () => {
     setHasCompletedOnboarding(true);
     const api = getNorotAPI();
-    await api.updateSettings({ hasCompletedOnboarding: true });
+    try {
+      await api.updateSettings({ hasCompletedOnboarding: true });
+    } catch (err) {
+      console.error('[useSettings] Failed to complete onboarding, reverting:', err);
+      setHasCompletedOnboarding(false);
+    }
   };
 
   // Mark daily setup complete, persist date, start telemetry, and show todo overlay

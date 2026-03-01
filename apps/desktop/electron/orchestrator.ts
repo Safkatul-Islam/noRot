@@ -239,7 +239,7 @@ function processTick(tick: TelemetryTick): void {
         graceMs: 10_000,
       })) {
         const id = state.activeInterventionId!;
-        console.log('[orchestrator] Active intervention with no visible overlay \u2014 treating as dismissed', { id });
+        console.log('[orchestrator] Active intervention with no visible overlay — treating as dismissed', { id });
         handleInterventionResponse(id, 'dismissed');
       }
 
@@ -475,7 +475,7 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
     // Check if we should intervene
     const now = Date.now();
     if (isSnoozeActive(now)) {
-      console.log('[orchestrator] Snooze active \u2014 skipping intervention check');
+      console.log('[orchestrator] Snooze active — skipping intervention check');
       return;
     }
     const cooldownMs = settings.cooldownSeconds * 1000;

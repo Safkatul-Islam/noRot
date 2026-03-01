@@ -80,7 +80,7 @@ export function VoiceTaskPanel({
     <GlassCard
       variant="dense"
       className={cn(
-        'w-full md:w-[320px] px-5 py-5 gap-4',
+        'w-full md:w-[420px] px-5 py-5 gap-4',
         'shrink-0 overflow-hidden',
         'max-h-[min(calc(100vh-180px),600px)]',
         className,
@@ -196,6 +196,7 @@ export function VoiceTaskPanel({
               todos={visibleTodos as TodoItemWithEdited[]}
               onUpdate={onUpdateTodos}
               itemLayoutIdPrefix={itemLayoutIdPrefix}
+              timeFormat={timeFormat}
             />
           )}
         </div>

@@ -1,223 +1,211 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react';
+import { CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { GlassCard } from '@/components/GlassCard';
+import { BlurFade } from '@/components/effects/BlurFade';
+import { AuroraText } from '@/components/effects/AuroraText';
+import { ScoreGauge } from '@/components/ScoreGauge';
+import { UsageChart } from '@/components/UsageChart';
+import { WinsCard } from '@/components/WinsCard';
 
-import { IPC_CHANNELS } from '../ipc-channels'
-import { useInterventions } from '../hooks/useInterventions'
-import { usePermissions } from '../hooks/usePermissions'
-import { useScore } from '../hooks/useScore'
-import { useTodos } from '../hooks/useTodos'
-import { useWins } from '../hooks/useWins'
-import { useVoice } from '../hooks/useVoice'
-import { useSettingsStore } from '../stores/settings-store'
+import { InterventionTimeline } from '@/components/InterventionTimeline';
+import { AudioControls } from '@/components/AudioControls';
+import { SEVERITY_BANDS, stripEmotionTags } from '@norot/shared';
+import { useScoreStore } from '@/stores/score-store';
+import { useAppStore } from '@/stores/app-store';
+import { getNorotAPI } from '@/lib/norot-api';
+import type { InterventionEvent } from '@norot/shared';
+import { Activity, History } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
-function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return '–'
-  return `${Math.round(value)}%`
+interface DashboardPageProps {
+  interventions: InterventionEvent[];
+  activeIntervention: InterventionEvent | null;
+  onRespond: (id: string, response: 'snoozed' | 'dismissed' | 'working') => void;
 }
 
-export function DashboardPage() {
-  const settings = useSettingsStore(s => s.settings)
-  const apiUrl = settings?.apiUrl ?? 'http://localhost:8000'
-  const { score, live, connection } = useScore(apiUrl)
-  const { active, respond } = useInterventions()
-  const { todos, createTodo, updateTodo, deleteTodo, openOverlay } = useTodos()
-  const { status: permissions } = usePermissions()
-  const wins = useWins()
+export function DashboardPage({ interventions, activeIntervention, onRespond }: DashboardPageProps) {
+  const { currentSeverity, reasons, recommendation } = useScoreStore();
+  const setActivePage = useAppStore((s) => s.setActivePage);
+  const [permissions, setPermissions] = useState<{
+    screenRecording: boolean;
+    status?: 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
+    canReadActiveWindow?: boolean;
+  } | null>(null);
 
-  const [toast, setToast] = useState<string | null>(null)
-  const showToast = (message: string) => {
-    setToast(message)
-    window.setTimeout(() => setToast(null), 1500)
-  }
+  useEffect(() => {
+    let cancelled = false;
+    const api = getNorotAPI();
 
-  const hasElevenLabsKey = useMemo(() => (settings?.elevenLabsApiKey?.trim()?.length ?? 0) > 0, [settings?.elevenLabsApiKey])
-  const muted = settings?.muted ?? false
-  const ttsEngine = settings?.ttsEngine ?? 'auto'
+    const check = async () => {
+      try {
+        if (typeof api.checkPermissions !== 'function') return;
+        const p = await api.checkPermissions();
+        if (cancelled) return;
+        setPermissions(p);
+      } catch {
+        if (!cancelled) setPermissions({ screenRecording: false });
+      }
+    };
 
-  const { voiceStatus } = useVoice({ muted, ttsEngine, hasElevenLabsKey, onToast: showToast })
+    void check();
+    const interval = setInterval(() => { void check(); }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
-  const [newTodo, setNewTodo] = useState('')
+  const missingScreenPermission =
+    permissions !== null &&
+    (permissions.screenRecording !== true || permissions.canReadActiveWindow === false);
 
-  const permissionsBad = permissions
-    ? (permissions.screenRecording !== 'granted' || permissions.canReadActiveWindow !== true)
-    : false
+  const requestPermissions = async () => {
+    try {
+      const api = getNorotAPI();
+      await api.requestPermissions?.();
+    } catch {
+      // ignore
+    }
+  };
+
+  const activeInterventionText = stripEmotionTags(activeIntervention?.text ?? '').trim();
+  const recommendationText = stripEmotionTags(recommendation?.text ?? '').trim();
+  const hasScoreData = reasons.length > 0 || !!recommendation;
+  const currentMessage = activeInterventionText
+    ? activeInterventionText
+    : recommendationText
+      ? recommendationText
+    : !hasScoreData
+      ? 'Your focus score is based on time spent in apps, how often you switch between them, and whether you dismiss reminders.'
+      : currentSeverity === 0
+        ? 'Your focus is strong. Keep it up.'
+        : 'No message for this score.';
 
   return (
-    <div className="space-y-6">
-      {toast ? (
-        <div className="rounded border border-white/10 bg-white/10 px-3 py-2 text-sm">
-          {toast}
-        </div>
-      ) : null}
+    <div className="flex flex-col gap-5 flex-1">
+      {/* Row 1: Score Hero + Sim/History column */}
+      <div className="grid grid-cols-12 gap-5 flex-1 min-h-0">
+        {/* Hero — uses "well" variant: most transparent, ether shows through the gauge */}
+        <BlurFade delay={0} className="col-span-8 h-full min-h-0">
+          <GlassCard glow variant="well" className="h-full min-h-0">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Activity className="size-4 text-primary" />
+                  <AuroraText className="text-base font-semibold">Focus Score</AuroraText>
+                </span>
+                <span
+                  className="text-xs font-medium"
+                  style={{ color: SEVERITY_BANDS[currentSeverity]?.color }}
+                >
+                  {SEVERITY_BANDS[currentSeverity]?.label}
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 min-h-0">
+              <div className="flex items-stretch gap-6 h-full min-h-0">
+                <div className="shrink-0 flex items-center">
+                  <ScoreGauge />
+                </div>
+                <div className="flex-1 flex flex-col gap-4 min-w-0 py-2">
+                  {missingScreenPermission && (
+                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                      <p className="text-xs text-text-primary font-medium">
+                        Screen Recording permission is off — focus scoring will be slow/inaccurate.
+                      </p>
+                      <p className="text-[11px] text-text-secondary mt-1">
+                        Enable it in Settings so noRot can detect which app/site you’re using.
+                        {permissions?.status ? ` (Status: ${permissions.status})` : ''}
+                      </p>
+                      <div className="flex gap-2 mt-2">
+                        <Button size="sm" variant="outline" onClick={requestPermissions}>
+                          Turn On Permissions
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setActivePage('settings')}>
+                          Open Settings
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="rounded-lg border border-white/[0.06] bg-[var(--color-glass-well)] backdrop-blur-[16px] p-3">
+                    <p className="text-xs text-text-muted mb-1 uppercase tracking-wider">Current Message</p>
+                    <p className="text-sm text-text-primary leading-relaxed">
+                      {currentMessage}
+                    </p>
+                  </div>
 
-      {permissionsBad ? (
-        <div className="rounded border border-yellow-400/30 bg-yellow-400/10 p-4 text-sm">
-          Permissions missing: Screen Recording / Accessibility may be required for active window monitoring.
-        </div>
-      ) : null}
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-text-muted uppercase tracking-wider">Contributing Factors</p>
+                    {reasons.length > 0 ? (
+                      reasons.map((reason, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 shrink-0" style={{ boxShadow: '0 0 6px var(--color-glow-primary)' }} />
+                          <p className="text-xs text-text-secondary leading-relaxed">
+                            {reason}
+                          </p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-text-secondary leading-relaxed">
+                        No strong signals yet. Your focus score is based on time spent in apps, how often you switch between them, and whether you dismiss reminders.
+                      </p>
+                    )}
+                  </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded border border-white/10 bg-white/5 p-4">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-white/70">Connection</div>
-            <div className={`text-sm ${connection.connected ? 'text-green-300' : 'text-white/60'}`}>
-              {connection.connected ? 'connected' : 'disconnected'}
-            </div>
-          </div>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-            <div className="rounded bg-white/5 p-3">
-              <div className="text-white/60">Focus</div>
-              <div className="mt-1 text-lg font-semibold">{live ? formatPercent(live.focusScore) : '–'}</div>
-            </div>
-            <div className="rounded bg-white/5 p-3">
-              <div className="text-white/60">Procrastination</div>
-              <div className="mt-1 text-lg font-semibold">{score ? formatPercent(score.procrastinationScore) : '–'}</div>
-            </div>
-            <div className="rounded bg-white/5 p-3">
-              <div className="text-white/60">Voice</div>
-              <div className="mt-1 text-lg font-semibold">{voiceStatus.speaking ? 'speaking' : 'idle'}</div>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <div className="text-sm text-white/70">Message</div>
-            <div className="mt-2 text-sm">
-              {score?.recommendation?.text ?? '—'}
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <div className="text-sm text-white/70">Reasons</div>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-white/80">
-              {(score?.reasons ?? []).map((r) => <li key={r}>{r}</li>)}
-              {(score?.reasons?.length ?? 0) === 0 ? <li>—</li> : null}
-            </ul>
-          </div>
-        </div>
-
-        <div className="rounded border border-white/10 bg-white/5 p-4">
-          <div className="text-sm text-white/70">Intervention</div>
-          {active && active.userResponse === 'pending' ? (
-            <div className="mt-3 space-y-3">
-              <div className="rounded bg-white/5 p-3 text-sm">
-                {active.text}
+                  <div className="mt-auto pt-2 border-t border-white/[0.06]">
+                    <AudioControls
+                      activeInterventionId={activeIntervention?.id ?? null}
+                      onRespond={onRespond}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="rounded bg-white/15 px-3 py-2 text-sm hover:bg-white/20"
-                  onClick={() => void respond(active.id, 'working')}
-                >
-                  I&apos;m working
-                </button>
-                <button
-                  type="button"
-                  className="rounded bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
-                  onClick={() => void respond(active.id, 'dismissed')}
-                >
-                  Dismiss
-                </button>
-                <button
-                  type="button"
-                  className="rounded bg-white/10 px-3 py-2 text-sm hover:bg-white/15"
-                  onClick={() => void respond(active.id, 'snoozed')}
-                >
-                  Snooze
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-3 text-sm text-white/70">No active intervention.</div>
-          )}
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
+
+        {/* Right column: History */}
+        <div className="col-span-4 flex flex-col gap-5 min-h-0 h-full">
+          <BlurFade delay={0.05} className="flex-1 min-h-0">
+            <GlassCard className="h-full min-h-[180px] flex flex-col overflow-hidden py-5 gap-4">
+              <CardHeader className="px-5">
+                <CardTitle className="flex items-center gap-2">
+                  <History className="size-4 text-warning" />
+                  Intervention History
+                  {interventions.length > 0 && (
+                    <span className="text-xs text-text-muted font-normal ml-1">
+                      ({interventions.length})
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex-1 min-h-0 overflow-hidden px-5">
+                <InterventionTimeline interventions={interventions} />
+              </CardContent>
+            </GlassCard>
+          </BlurFade>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded border border-white/10 bg-white/5 p-4">
-          <div className="text-sm text-white/70">Wins</div>
-          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-            <div className="rounded bg-white/5 p-3">
-              <div className="text-white/60">Refocus today</div>
-              <div className="mt-1 text-lg font-semibold">{wins ? String(wins.refocusCount) : '–'}</div>
-            </div>
-            <div className="rounded bg-white/5 p-3">
-              <div className="text-white/60">Focused minutes</div>
-              <div className="mt-1 text-lg font-semibold">{wins ? String(Math.round(wins.totalFocusedMinutes)) : '–'}</div>
-            </div>
-          </div>
-        </div>
-        <div className="rounded border border-white/10 bg-white/5 p-4">
-          <div className="text-sm text-white/70">Notes</div>
-          <div className="mt-2 text-sm text-white/70">
-            Enable Screen Recording/Accessibility on macOS for active-window telemetry. Configure ElevenLabs to enable voice.
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded border border-white/10 bg-white/5 p-4">
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-white/70">Todos</div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/15"
-              onClick={() => void window.norot.invoke(IPC_CHANNELS.voice.openVoiceChat, { mode: 'coach' })}
-            >
-              Voice chat
-            </button>
-            <button
-              type="button"
-              className="rounded bg-white/10 px-3 py-1 text-sm hover:bg-white/15"
-              onClick={() => void openOverlay()}
-            >
-              Open overlay
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 flex gap-2">
-          <input
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            placeholder="Add a todo"
-            className="w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm outline-none focus:border-white/30"
-          />
-          <button
-            type="button"
-            className="rounded bg-white/15 px-3 py-2 text-sm hover:bg-white/20"
-            onClick={() => {
-              const text = newTodo.trim()
-              if (!text) return
-              setNewTodo('')
-              void createTodo(text)
-            }}
-          >
-            Add
-          </button>
-        </div>
-
-        <ul className="mt-4 space-y-2">
-          {todos.map(todo => (
-            <li key={todo.id} className="flex items-center justify-between rounded bg-white/5 px-3 py-2 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={todo.done}
-                  onChange={(e) => void updateTodo(todo.id, { done: e.target.checked })}
-                />
-                <span className={todo.done ? 'text-white/50 line-through' : ''}>{todo.text}</span>
-              </label>
-              <button
-                type="button"
-                className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/15"
-                onClick={() => void deleteTodo(todo.id)}
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-          {todos.length === 0 ? <li className="text-sm text-white/60">No todos yet.</li> : null}
-        </ul>
+      {/* Row 2: Wins + Usage Chart */}
+      <div className="grid grid-cols-12 gap-5 shrink-0">
+        <BlurFade delay={0.10} className="col-span-4">
+          <WinsCard />
+        </BlurFade>
+        <BlurFade delay={0.15} className="col-span-8">
+          <GlassCard variant="dense">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="size-4 text-success" />
+                Usage (Last 60 min)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <UsageChart />
+            </CardContent>
+          </GlassCard>
+        </BlurFade>
       </div>
     </div>
-  )
+  );
 }

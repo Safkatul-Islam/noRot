@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trash2, Plus, Check, Link2, ChevronDown, X, Clock, AlarmClock, Timer } from 'lucide-react';
+import { Trash2, Plus, Check, Link2, ChevronDown, X, Play, Hourglass, Flag } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { AppNameCombobox } from '@/components/AppNameCombobox';
 import { getNorotAPI } from '@/lib/norot-api';
@@ -241,20 +241,20 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                       )}
                       {todo.startTime && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
-                          <Clock className="size-2.5" />
+                          <Play className="size-2.5" />
                           {formatTime(todo.startTime)}
                           {timeZoneLabel ? ` ${timeZoneLabel}` : ''}
                         </span>
                       )}
                       {typeof todo.durationMinutes === 'number' && todo.durationMinutes > 0 && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
-                          <Timer className="size-2.5" />
+                          <Hourglass className="size-2.5" />
                           {formatDurationMinutes(todo.durationMinutes)}
                         </span>
                       )}
                       {todo.deadline && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-md text-violet-400 bg-violet-400/10 border border-violet-400/20 flex items-center gap-0.5">
-                          <AlarmClock className="size-2.5" />
+                          <Flag className="size-2.5" />
                           {formatTime(todo.deadline)}
                           {timeZoneLabel ? ` ${timeZoneLabel}` : ''}
                         </span>

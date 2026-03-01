@@ -1,8 +1,15 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vitest/config';
+import { resolve } from 'path';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+    },
+  },
   test: {
-    exclude: ['**/node_modules/**', '**/out/**', '**/dist/**']
-  }
-})
-
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}', 'electron/**/*.test.{ts,tsx}'],
+    setupFiles: ['src/test/setup.ts'],
+  },
+});

@@ -49,3 +49,4 @@ export function cancelSnooze(): void {
   timer = null;
   emit();
 }
+

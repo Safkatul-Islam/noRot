@@ -43,3 +43,4 @@ describe('intervention-state', () => {
     expect(getActiveIntervention()).toBeNull();
   });
 });
+

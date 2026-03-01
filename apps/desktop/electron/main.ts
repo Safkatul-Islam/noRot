@@ -5,18 +5,19 @@ import { registerIpcHandlers } from './ipc-handlers';
 import { startTelemetry, stopTelemetry } from './orchestrator';
 import { createTray, destroyTray } from './tray';
 import { IPC_CHANNELS } from './types';
+import { shouldAutoCreateTodoOverlay, shouldAutoStartTelemetry } from './startup';
 import {
   setMainWindow,
   getTodoWindow,
   setTodoWindow,
-  getVoiceOrbWindow,
-  setVoiceOrbWindow,
   createTodoOverlayWindow,
-  createVoiceOrbWindow,
+  isTodoDragging,
+  closeInterventionOverlayWindow,
 } from './window-manager';
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+let focusDebounce: ReturnType<typeof setTimeout> | null = null;
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -60,6 +61,12 @@ function createWindow(): void {
 
   // Load renderer
   const rendererUrl = resolveRendererUrl();
+  const isDev = !!rendererUrl;
+
+  if (isDev) {
+    console.log('[main] Loading renderer URL:', rendererUrl);
+  }
+
   if (rendererUrl) {
     mainWindow.loadURL(rendererUrl);
   } else {
@@ -70,15 +77,37 @@ function createWindow(): void {
     console.error('[main] did-fail-load', { errorCode, errorDescription, validatedURL });
   });
 
-  // macOS: hide window instead of closing so the app stays in the tray
-  if (process.platform === 'darwin') {
-    mainWindow.on('close', (e) => {
-      if (!isQuitting) {
-        e.preventDefault();
-        mainWindow?.hide();
-      }
+  if (isDev) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      console.log('[main] did-finish-load', {
+        url: mainWindow?.webContents.getURL(),
+        title: mainWindow?.getTitle(),
+      });
+    });
+
+    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      const levelLabel = ['log', 'warn', 'error', 'debug'][(level - 1) as 0 | 1 | 2 | 3] ?? `level:${level}`;
+      console.log(`[renderer:${levelLabel}] ${message} (${sourceId}:${line})`);
+    });
+
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      console.error('[main] render-process-gone', details);
+    });
+
+    // Surface preload failures (often look like a black screen).
+    mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+      console.error('[main] preload-error', { preloadPath, error });
     });
   }
+
+  // Close-to-tray: keep telemetry + voice running even when the window is closed.
+  // Use the tray menu "Quit noRot" to fully exit.
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
+  });
 
   // Notify renderer whenever the window becomes visible again.
   // This is the only reliable signal in Electron (visibilitychange is dead
@@ -99,6 +128,12 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Ensure we stay a "regular" app (Cmd-Tab/Dock visible) even if the main window is hidden.
+  if (process.platform === 'darwin') {
+    try { app.dock?.show(); } catch { /* ignore */ }
+    try { (app as any).setActivationPolicy?.('regular'); } catch { /* ignore */ }
+  }
+
   // Dev builds run inside Electron.app, so set the Dock icon explicitly.
   if (process.platform === 'darwin' && app.dock) {
     try {
@@ -124,27 +159,85 @@ app.whenReady().then(() => {
     createTray(mainWindow);
   }
 
-  // Only start telemetry if user has completed onboarding
+  // App-level focus tracking — debounced to avoid flicker during window switches
+  let lastAnyFocused: boolean | null = null;
+
+  const syncTodoOverlayVisibility = (anyFocused: boolean) => {
+    const todoWin = getTodoWindow();
+    if (!todoWin || todoWin.isDestroyed()) return;
+
+    // Overlay should be visible only when noRot is NOT focused.
+    if (anyFocused) {
+      if (todoWin.isVisible()) todoWin.hide();
+      return;
+    }
+
+    if (!todoWin.isVisible()) todoWin.showInactive();
+  };
+
+  const checkFocus = () => {
+    if (focusDebounce) clearTimeout(focusDebounce);
+    focusDebounce = setTimeout(() => {
+      const todoWin = getTodoWindow();
+      const anyFocused = BrowserWindow.getAllWindows().some(
+        (w) => !w.isDestroyed() && w.isFocused() && w !== todoWin
+      );
+
+      // Sync overlay visibility (unless dragging). The overlay can be created while
+      // focus state stays the same, and we still need to apply the correct visibility.
+      if (!isTodoDragging()) {
+        syncTodoOverlayVisibility(anyFocused);
+      }
+
+      // Tell the main window about focus state
+      if (anyFocused !== lastAnyFocused) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC_CHANNELS.ON_APP_FOCUS_CHANGED, { focused: anyFocused });
+        }
+      }
+
+      lastAnyFocused = anyFocused;
+    }, 150);
+  };
+
+  app.on('browser-window-focus', checkFocus);
+  app.on('browser-window-blur', checkFocus);
+  // Creating the overlay shouldn't require a focus change to sync visibility.
+  app.on('browser-window-created', checkFocus);
+
+  // Initialize focus state once on startup.
+  checkFocus();
+
+  // Only auto-start telemetry if user has completed onboarding AND already
+  // did daily setup today AND monitoring is enabled. Otherwise the renderer
+  // will start telemetry when the user finishes the daily setup flow.
   const settings = database.getSettings();
-  if (settings.hasCompletedOnboarding) {
-    console.log('[main] Onboarding complete — starting telemetry');
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  if (shouldAutoStartTelemetry(settings, today)) {
+    console.log('[main] Onboarding + daily setup complete — starting telemetry');
     startTelemetry();
   } else {
-    console.log('[main] Onboarding incomplete — telemetry will NOT start until onboarding is finished');
+    console.log('[main] Telemetry will NOT auto-start — waiting for daily setup or monitoring paused');
   }
 
-  // Create voice orb overlay after main window loads
-  mainWindow.webContents.on('did-finish-load', () => {
-    createVoiceOrbWindow();
-  });
-
-  // Auto-show todo overlay if user had it open last session
-  if (settings.autoShowTodoOverlay) {
+  // Auto-show todo overlay if user completed onboarding, did daily setup today,
+  // and has autoShowTodoOverlay enabled.
+  if (shouldAutoCreateTodoOverlay(settings, today)) {
     createTodoOverlayWindow();
+
+    // The overlay window starts hidden (show: false). Let focus tracking decide
+    // whether it should be shown right now.
+    checkFocus();
   }
 
   // macOS: show existing window or re-create when dock icon is clicked
-  app.on('activate', () => {
+  app.on('activate', (_event, hasVisibleWindows) => {
+    // If a window is already visible (e.g. the todo overlay), don't force-open
+    // the main window. This prevents the main window from popping up when the
+    // user clicks/drag-scrolls inside the overlay.
+    if (hasVisibleWindows) return;
+
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show();
       mainWindow.focus();
@@ -164,11 +257,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true;
 
-  // Close voice orb overlay window
-  const voiceOrbWin = getVoiceOrbWindow();
-  if (voiceOrbWin && !voiceOrbWin.isDestroyed()) {
-    voiceOrbWin.destroy();
-    setVoiceOrbWindow(null);
+  // Cancel any pending focus debounce to prevent IPC to destroyed windows
+  if (focusDebounce) {
+    clearTimeout(focusDebounce);
+    focusDebounce = null;
   }
 
   // Close todo overlay window if open
@@ -177,6 +269,8 @@ app.on('before-quit', () => {
     todoWin.destroy();
     setTodoWindow(null);
   }
+
+  closeInterventionOverlayWindow();
 
   destroyTray();
   stopTelemetry();

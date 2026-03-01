@@ -228,10 +228,10 @@ export function createTelemetryCollector(
       }
 
       // Only apply override if the cached result matches the CURRENT activity
-    if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
-      category = 'productive';
-    }
-  } else {
+      if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
+        category = 'productive';
+      }
+    } else {
       // Clear context result when user switches to non-distracting app
       lastContextResult = null;
       lastContextResultKey = '';
@@ -327,7 +327,7 @@ export function createTelemetryCollector(
       console.log(
         `[telemetry] Snapshot #${tickCount}: app="${appName}" category="${snapshot.categories.activeCategory}" domain="${activeDomain ?? 'none'}" activity="${snapshot.categories.activityLabel ?? 'none'}" source="${snapshot.categories.activitySource ?? 'none'}" distracting=${distractingMinutes}min session=${sessionMinutes}min rulesCount=${rules.length}`
       );
-      onSnapshot(snapshot);
+      await onSnapshot(snapshot);
     }
   }
 

@@ -41,5 +41,11 @@ export function useTodos(enabled = true) {
     } catch { /* ignore */ }
   };
 
-  return { todos, handleToggle, handleDelete, handleAdd };
+  const handleUpdate = async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
+    try {
+      await getNorotAPI().updateTodo(id, fields);
+    } catch { /* ignore */ }
+  };
+
+  return { todos, handleToggle, handleDelete, handleAdd, handleUpdate };
 }

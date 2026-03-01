@@ -19,3 +19,4 @@ export function clearActiveIntervention(interventionId?: string): void {
 export function getActiveIntervention(): InterventionEvent | null {
   return activeIntervention;
 }
+

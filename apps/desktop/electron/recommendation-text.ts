@@ -31,15 +31,15 @@ export function buildStableRecommendationText(severity: Severity, persona: Perso
         "Let's make it easy: set a 5‑minute timer and do the first obvious step.",
       ],
       interrupt: [
-        "Hard moment. Take one breath, then do the smallest possible "start" of your task.",
+        "Hard moment. Take one breath, then do the smallest possible “start” of your task.",
         "Interrupting the loop: close one distraction, open one work thing, do one tiny step.",
         "You don't need motivation, you need momentum. What's the 2‑minute start?",
-        "Okay — we're stuck. Make the task smaller until it feels doable. What's the tiny version?",
+        "Okay — we’re stuck. Make the task smaller until it feels doable. What’s the tiny version?",
       ],
       crisis: [
         "Crisis mode means kindness + structure: stand up, water, breathe, then one tiny next step.",
-        "If you're spiraling, that's human. Let's do a 60‑second reset and then pick one action.",
-        "Lower the bar to "good enough." What's one micro‑step that helps Future You?",
+        "If you’re spiraling, that’s human. Let’s do a 60‑second reset and then pick one action.",
+        "Lower the bar to “good enough.” What’s one micro‑step that helps Future You?",
         "Reset plan: breathe, unclench, then do one thing that reduces stress by 1%.",
       ],
     },
@@ -64,7 +64,7 @@ export function buildStableRecommendationText(severity: Severity, persona: Perso
       ],
       crisis: [
         "Reset protocol: stand up, water, breathe. Then choose the smallest possible next move.",
-        "Crisis = simplify: one task, one step, no drama. What's the step?",
+        "Crisis = simplify: one task, one step, no drama. What’s the step?",
         "Lower the bar and move anyway: what's the tiniest action that counts as progress?",
         "Stop spiraling. Start small. One minute of forward motion, then reevaluate.",
       ],
