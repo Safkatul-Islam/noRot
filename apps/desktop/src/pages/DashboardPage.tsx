@@ -27,6 +27,7 @@ export function DashboardPage({ interventions, activeIntervention, onRespond }: 
   const { currentSeverity, reasons, recommendation } = useScoreStore();
   const setActivePage = useAppStore((s) => s.setActivePage);
   const activityStatus = useAppStore((s) => s.activityStatus);
+  const telemetryActive = useAppStore((s) => s.telemetryActive);
   const [permissions, setPermissions] = useState<{
     screenRecording: boolean;
     status?: 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
@@ -128,6 +129,16 @@ export function DashboardPage({ interventions, activeIntervention, onRespond }: 
                   <ScoreGauge />
                 </div>
                 <div className="flex-1 flex flex-col gap-4 min-w-0 py-2">
+                  {!telemetryActive && (
+                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                      <p className="text-xs text-text-primary font-medium">
+                        Monitoring is paused — your focus score won't update.
+                      </p>
+                      <p className="text-[11px] text-text-secondary mt-1">
+                        Turn it on using the toggle in the bottom-right corner.
+                      </p>
+                    </div>
+                  )}
                   {missingScreenPermission && (
                     <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
                       <p className="text-xs text-text-primary font-medium">

@@ -37,24 +37,35 @@ export function useScore() {
       void pingApi();
     }, 10_000);
 
-    // Sync telemetry state from main process
+    // Sync telemetry state from main process.
+    // Only hydrate the latest score when telemetry is already running.
+    // (If monitoring is paused, the last stored score can be from a previous session
+    // and looks "wrong" right after opening the app.)
     const setTelemetryActive = useAppStore.getState().setTelemetryActive;
-    api.isTelemetryActive().then((active) => {
-      if (!cancelled) setTelemetryActive(active);
-    }).catch(() => {});
+    api
+      .isTelemetryActive()
+      .then(async (active) => {
+        if (cancelled) return;
+        setTelemetryActive(active);
 
-    // Hydrate latest score (best-effort).
-    api.getLatestScore().then((latest) => {
-      if (!latest || cancelled) return;
-      setScore(
-        latest.procrastinationScore,
-        latest.severity,
-        latest.reasons,
-        latest.recommendation
-      );
-    }).catch(() => {
-      // ignore
-    });
+        if (!active) return;
+
+        try {
+          const latest = await api.getLatestScore();
+          if (!latest || cancelled) return;
+          setScore(
+            latest.procrastinationScore,
+            latest.severity,
+            latest.reasons,
+            latest.recommendation
+          );
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {
+        // ignore
+      });
 
     const unsubscribe = api.onScoreUpdate(
       (data: ScoreResponse) => {
