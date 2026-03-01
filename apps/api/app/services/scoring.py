@@ -4,13 +4,7 @@ Matches the scoring algorithm from the noRot architecture doc.
 """
 
 from ..models import UsageSnapshot
-from ..constants import (
-    WEIGHT_DISTRACT_RATIO,
-    WEIGHT_SWITCH_RATE,
-    WEIGHT_INTENT_GAP,
-    WEIGHT_SNOOZE_PRESSURE,
-    LATE_NIGHT_MULTIPLIER,
-)
+from ..constants import SCORING_WEIGHTS, LATE_NIGHT_MULTIPLIER
 
 
 def _parse_hour(time_of_day_local: str) -> int:
@@ -102,10 +96,10 @@ def compute_score(snapshot: UsageSnapshot, snooze_pressure: float = 0.0) -> floa
 
     # --- base score ---
     base = 100.0 * (
-        WEIGHT_DISTRACT_RATIO * distract_ratio
-        + WEIGHT_SWITCH_RATE * norm_switch_rate_effective
-        + WEIGHT_INTENT_GAP * intent_gap
-        + WEIGHT_SNOOZE_PRESSURE * snooze_p
+        SCORING_WEIGHTS["distractRatio"] * distract_ratio
+        + SCORING_WEIGHTS["switchRate"] * norm_switch_rate_effective
+        + SCORING_WEIGHTS["intentGap"] * intent_gap
+        + SCORING_WEIGHTS["snoozePressure"] * snooze_p
     )
 
     # --- late-night multiplier ---

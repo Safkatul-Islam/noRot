@@ -218,7 +218,7 @@ function decaySnoozePressure(): number {
 function processTick(tick: TelemetryTick): void {
   try {
     if (!state.focusEngine) {
-      state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+      state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100 });
       state.latestFocusScore = 100;
       state.prevFocusScore = 100;
     }
@@ -253,12 +253,12 @@ function processTick(tick: TelemetryTick): void {
       state.latestFocusScore = res.focusScore;
     }
 
-    // Arm praise once we dip below 85, then praise once we recover to 90+.
-    if (state.latestFocusScore < 85) state.praiseArmed = true;
+    // Arm praise once we dip below 65 ("Focused" band), then praise once we recover to 85+ ("Locked In").
+    if (state.latestFocusScore < 65) state.praiseArmed = true;
 
     const now = Date.now();
     const overlayVisible = isInterventionOverlayVisible();
-    if (!overlayVisible && !state.activeInterventionId && state.praiseArmed && state.latestFocusScore >= 90 && now - state.lastPraiseAt > 60_000) {
+    if (!overlayVisible && !state.activeInterventionId && state.praiseArmed && state.latestFocusScore >= 85 && now - state.lastPraiseAt > 60_000) {
       state.praiseArmed = false;
       state.lastPraiseAt = now;
       const settings = ensureSettings();
@@ -428,10 +428,11 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
     // Send score update to renderer
     sendToRenderer(IPC_CHANNELS.ON_SCORE_UPDATE, scoreResult);
 
-    // Update tray icon with latest state
+    // Update tray icon with live score (not the stale snapshot score)
+    const liveProcScore = clamp(Math.round((100 - state.latestFocusScore) + decaySnoozePressure()), 0, 100);
     updateTrayState({
-      score: scoreResult.procrastinationScore,
-      severity: scoreResult.severity,
+      score: liveProcScore,
+      severity: scoreToSeverity(liveProcScore),
       activeApp: snapshot.categories.activeApp,
       activeCategory: snapshot.categories.activeCategory,
       activeDomain: snapshot.categories.activeDomain,
@@ -658,7 +659,7 @@ export function startTelemetry(): void {
   clearActiveIntervention();
   state.interventionCategoriesById = new Map();
   state.complianceSnapshots = 0;
-  state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+  state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100 });
   state.latestFocusScore = 100;
   state.prevFocusScore = 100;
   state.decaySlowUntil = 0;

@@ -11,11 +11,11 @@ export interface SeverityBand {
 }
 
 export const SEVERITY_BANDS: SeverityBand[] = [
-  { severity: 0, label: 'Focused', scoreMin: 0, scoreMax: 24, color: '#22c55e', mode: 'none', audioTag: '' },
-  { severity: 1, label: 'Drifting', scoreMin: 25, scoreMax: 49, color: '#eab308', mode: 'nudge', audioTag: '[thoughtful]' },
-  { severity: 2, label: 'Distracted', scoreMin: 50, scoreMax: 69, color: '#f97316', mode: 'remind', audioTag: '[thoughtful]' },
-  { severity: 3, label: 'Procrastinating', scoreMin: 70, scoreMax: 89, color: '#ef4444', mode: 'interrupt', audioTag: '[concerned]' },
-  { severity: 4, label: 'Crisis', scoreMin: 90, scoreMax: 100, color: '#a855f7', mode: 'crisis', audioTag: '[thoughtful]' },
+  { severity: 0, label: 'Locked In', scoreMin: 0, scoreMax: 15, color: '#22c55e', mode: 'none', audioTag: '' },
+  { severity: 1, label: 'Focused', scoreMin: 16, scoreMax: 35, color: '#4ade80', mode: 'none', audioTag: '' },
+  { severity: 2, label: 'Slightly Distracted', scoreMin: 36, scoreMax: 60, color: '#eab308', mode: 'nudge', audioTag: '[thoughtful]' },
+  { severity: 3, label: 'Very Distracted', scoreMin: 61, scoreMax: 85, color: '#f97316', mode: 'remind', audioTag: '[concerned]' },
+  { severity: 4, label: 'Cooked', scoreMin: 86, scoreMax: 100, color: '#ef4444', mode: 'interrupt', audioTag: '[thoughtful]' },
 ];
 
 export const PERSONAS: Record<Persona, { label: string; description: string; voiceId: string }> = {
@@ -39,7 +39,7 @@ export const MAX_SNOOZE_PRESSURE = 3;
 
 export const AUDIO_TAGS: Record<Severity, string> = {
   0: '',
-  1: '[thoughtful]',
+  1: '',
   2: '[thoughtful]',
   3: '[concerned]',
   4: '[thoughtful]',
@@ -59,11 +59,11 @@ export interface FocusBand {
 }
 
 export const FOCUS_SEVERITY_BANDS: FocusBand[] = [
-  { label: 'Focused', scoreMin: 76, scoreMax: 100, color: '#22c55e' },
-  { label: 'Drifting', scoreMin: 51, scoreMax: 75, color: '#eab308' },
-  { label: 'Distracted', scoreMin: 31, scoreMax: 50, color: '#f97316' },
-  { label: 'Procrastinating', scoreMin: 11, scoreMax: 30, color: '#ef4444' },
-  { label: 'Crisis', scoreMin: 0, scoreMax: 10, color: '#a855f7' },
+  { label: 'Locked In', scoreMin: 85, scoreMax: 100, color: '#22c55e' },
+  { label: 'Focused', scoreMin: 65, scoreMax: 84, color: '#4ade80' },
+  { label: 'Slightly Distracted', scoreMin: 40, scoreMax: 64, color: '#eab308' },
+  { label: 'Very Distracted', scoreMin: 15, scoreMax: 39, color: '#f97316' },
+  { label: 'Cooked', scoreMin: 0, scoreMax: 14, color: '#ef4444' },
 ];
 
 export function getFocusBand(focusScore: number): FocusBand {
@@ -78,20 +78,17 @@ export function stripEmotionTags(text: string): string {
 
 export const INTERVENTION_SCRIPTS: Record<Persona, Record<number, string>> = {
   calm_friend: {
-    1: '[thoughtful] Hey, I noticed you\'ve been scrolling for a while. Maybe take a breath and refocus?',
-    2: '[thoughtful] I notice you\'ve drifted a bit. What was the next small step on your task?',
+    2: '[thoughtful] Hey, I noticed you\'ve been scrolling for a while. Maybe take a breath and refocus?',
     3: '[concerned] It looks like you\'ve been away from your work for a while. What\'s making it hard to start?',
     4: '[thoughtful] Hey... I know things feel heavy right now. It\'s okay to take a break. Want to talk about it?',
   },
   coach: {
-    1: '[thoughtful] Quick check-in — are you working on what you planned? Let\'s stay on track.',
-    2: '[thoughtful] You\'ve been switching a lot. What\'s the one thing you could do in the next five minutes?',
+    2: '[thoughtful] Quick check-in — are you working on what you planned? Let\'s stay on track.',
     3: '[concerned] I can see you\'re stuck. What\'s the smallest piece of your task you could tackle right now?',
     4: '[thoughtful] I see you\'re struggling. That\'s okay. Let\'s take this one step at a time.',
   },
   tough_love: {
-    1: '[thoughtful] BRUH. You\'re drifting. WHAT THE FUCK were you actually about to work on, lol?',
-    2: '[thoughtful] You\'re distracted. CLOSE IT and pick ONE 5-minute step. What is it, bitch?',
+    2: '[thoughtful] BRUH. You\'re drifting. WHAT THE FUCK were you actually about to work on, lol?',
     3: '[concerned] You\'ve been procrastinating long enough. Start the task - ugly is fine. What\'s step one? GO.',
     4: '[thoughtful] Crisis mode. STOP. Breathe, stand up, drink water - then pick the smallest next move.',
   },

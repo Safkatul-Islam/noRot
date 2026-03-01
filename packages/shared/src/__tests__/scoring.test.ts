@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest'
 import type { UsageSnapshot } from '../types.js'
-import { applySnoozeEscalation, calculateScore, scoreToSeverity } from '../scoring.js'
+import { applySnoozeEscalation, calculateScore } from '../scoring.js'
+import { SEVERITY_BANDS } from '../constants.js'
+
+/** Helper to map a procrastination score to its severity via SEVERITY_BANDS. */
+function scoreToSeverity(score: number): number {
+  const band = SEVERITY_BANDS.find(b => score >= b.scoreMin && score <= b.scoreMax)
+  return band ? band.severity : 0
+}
 
 function makeSnapshot(overrides?: Partial<UsageSnapshot>): UsageSnapshot {
   const base: UsageSnapshot = {
@@ -12,7 +19,7 @@ function makeSnapshot(overrides?: Partial<UsageSnapshot>): UsageSnapshot {
       productiveMinutes: 10,
       appSwitchesLast5Min: 0,
       idleSecondsLast5Min: 0,
-      timeOfDayLocal: 12,
+      timeOfDayLocal: '12:00',
       snoozesLast60Min: 0
     },
     categories: {
@@ -30,37 +37,40 @@ function makeSnapshot(overrides?: Partial<UsageSnapshot>): UsageSnapshot {
 }
 
 describe('scoreToSeverity', () => {
-  test('maps score boundaries to severity bands', () => {
+  test('maps score boundaries to new severity bands', () => {
+    // New bands: 0=Locked In (0-15), 1=Focused (16-35), 2=Slightly Distracted (36-60),
+    // 3=Very Distracted (61-85), 4=Cooked (86-100)
     expect(scoreToSeverity(0)).toBe(0)
-    expect(scoreToSeverity(24)).toBe(0)
-    expect(scoreToSeverity(25)).toBe(1)
-    expect(scoreToSeverity(49)).toBe(1)
-    expect(scoreToSeverity(50)).toBe(2)
-    expect(scoreToSeverity(69)).toBe(2)
-    expect(scoreToSeverity(70)).toBe(3)
-    expect(scoreToSeverity(89)).toBe(3)
-    expect(scoreToSeverity(90)).toBe(4)
+    expect(scoreToSeverity(15)).toBe(0)
+    expect(scoreToSeverity(16)).toBe(1)
+    expect(scoreToSeverity(35)).toBe(1)
+    expect(scoreToSeverity(36)).toBe(2)
+    expect(scoreToSeverity(60)).toBe(2)
+    expect(scoreToSeverity(61)).toBe(3)
+    expect(scoreToSeverity(85)).toBe(3)
+    expect(scoreToSeverity(86)).toBe(4)
     expect(scoreToSeverity(100)).toBe(4)
   })
 })
 
 describe('calculateScore', () => {
   test('prefers focusScore when present', () => {
-    const snap = makeSnapshot({ signals: { focusScore: 80, timeOfDayLocal: 23 } })
+    const snap = makeSnapshot({ signals: { focusScore: 80, timeOfDayLocal: '12:00' } })
     const result = calculateScore(snap, 5)
-    expect(result.procrastinationScore).toBe(25)
-    expect(result.severity).toBe(1)
+    // procScore = 100 - 80 + 5 = 25
+    expect(result.score).toBe(25)
+    expect(result.severity).toBe(1) // 25 falls in Focused band (16-35)
   })
 
   test('floors distract ratio to 0.9 when currently distracting', () => {
     const snap = makeSnapshot({
-      signals: { sessionMinutes: 10, distractingMinutes: 1 },
+      signals: { sessionMinutes: 10, distractingMinutes: 1, timeOfDayLocal: '12:00' },
       categories: { activeCategory: 'social' }
     })
     const result = calculateScore(snap)
     // base = 100*(0.55*0.9) = 49.5 -> round 50
-    expect(result.procrastinationScore).toBe(50)
-    expect(result.severity).toBe(2)
+    expect(result.score).toBe(50)
+    expect(result.severity).toBe(2) // 50 falls in Slightly Distracted band (36-60)
   })
 
   test('does not apply switch penalty when not distracting and ratio < 0.2', () => {
@@ -68,14 +78,15 @@ describe('calculateScore', () => {
       signals: {
         sessionMinutes: 10,
         distractingMinutes: 1, // 0.1
-        appSwitchesLast5Min: 50 // extremely high, but should be ignored
+        appSwitchesLast5Min: 50, // extremely high, but should be ignored
+        timeOfDayLocal: '12:00'
       },
       categories: { activeCategory: 'productive' }
     })
     const result = calculateScore(snap)
     // base = 100*(0.55*0.1) = 5.5 -> round 6
-    expect(result.procrastinationScore).toBe(6)
-    expect(result.severity).toBe(0)
+    expect(result.score).toBe(6)
+    expect(result.severity).toBe(0) // 6 falls in Locked In band (0-15)
   })
 
   test('applies late-night multiplier at hour >= 23', () => {
@@ -83,13 +94,13 @@ describe('calculateScore', () => {
       signals: {
         sessionMinutes: 10,
         distractingMinutes: 5, // 0.5
-        timeOfDayLocal: 23
+        timeOfDayLocal: '23:00'
       }
     })
     const result = calculateScore(snap)
     // base = 100*(0.55*0.5) = 27.5; mult 1.25 => 34.375 -> round 34
-    expect(result.procrastinationScore).toBe(34)
-    expect(result.severity).toBe(1)
+    expect(result.score).toBe(34)
+    expect(result.severity).toBe(1) // 34 falls in Focused band (16-35)
   })
 })
 

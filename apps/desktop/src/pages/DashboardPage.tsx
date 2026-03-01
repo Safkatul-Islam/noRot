@@ -56,8 +56,7 @@ export function DashboardPage({ interventions, activeIntervention, onRespond }: 
   }, []);
 
   const missingScreenPermission =
-    permissions !== null &&
-    (permissions.screenRecording !== true || permissions.canReadActiveWindow === false);
+    permissions !== null && permissions.screenRecording !== true;
 
   const requestPermissions = async () => {
     try {

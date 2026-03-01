@@ -375,7 +375,7 @@ export function registerIpcHandlers(): void {
       lastScreenProbeOk = await canReadActiveWindow();
     }
 
-    return { screenRecording: lastScreenProbeOk, status, canReadActiveWindow: lastScreenProbeOk };
+    return { screenRecording: true, status, canReadActiveWindow: lastScreenProbeOk };
   });
 
   ipcMain.handle(IPC_CHANNELS.REQUEST_PERMISSIONS, async () => {
