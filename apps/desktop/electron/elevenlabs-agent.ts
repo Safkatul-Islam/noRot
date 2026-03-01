@@ -20,16 +20,16 @@ async function fetchWithNetworkError(
   }
 }
 
-const AGENT_CONFIG_VERSION = 6;
+const AGENT_CONFIG_VERSION = 7;
 
 const COACH_TURN_CONFIG = {
-  turn_timeout: 30,
-  silence_end_call_timeout: 120,
+  turn_timeout: 60,
+  silence_end_call_timeout: 300,
 } as const;
 
 const CHECKIN_TURN_CONFIG = {
-  turn_timeout: 15,
-  silence_end_call_timeout: 60,
+  turn_timeout: 30,
+  silence_end_call_timeout: 120,
 } as const;
 
 const COACH_LLM_MODEL_ID = 'gpt-4o-mini';
