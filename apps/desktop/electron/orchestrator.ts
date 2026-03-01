@@ -23,10 +23,15 @@ import * as apiClient from './api-client';
 import * as database from './database';
 import { updateTrayState } from './tray';
 import { buildInterventionText } from './intervention-text';
+import { buildZeroFocusInterventionText } from './intervention-text';
 import { buildStableRecommendationText } from './recommendation-text';
+import { buildPraiseText } from './praise-text';
 import { generateScript, generateContextAwareScript } from './gemini-client';
 import { clearContextCache } from './context-checker';
-import { getMainWindow } from './window-manager';
+import { getMainWindow, closeInterventionOverlayWindow, showInterventionOverlayWindow, isInterventionOverlayVisible } from './window-manager';
+import { isSnoozeActive } from './snooze-state';
+import { clearActiveIntervention, setActiveIntervention } from './intervention-state';
+import { hasInterventionGapElapsed, shouldTreatInterventionAsDismissed } from './intervention-guard';
 import type { TelemetryTick } from './telemetry';
 
 function generateId(): string {
@@ -72,30 +77,48 @@ function getNowMinutesInTimeZone(timeZoneSetting: string | undefined): number {
 interface OrchestratorState {
   telemetryCollector: TelemetryCollector | null;
   lastInterventionTime: number;
+  lastStageInterventionAt: number;
+  lastStageInterventionSeverity: Severity;
+  lastAnyInterventionShownAt: number;
   snoozePressure: number;
   snoozeTimestamps: number[];
   currentSettings: UserSettings;
   activeInterventionId: string | null;
+  activeInterventionStartedAt: number;
   activeInterventionCategories: { activeApp: string; activeDomain?: string } | null;
   interventionCategoriesById: Map<string, { activeApp: string; activeDomain?: string }>;
   complianceSnapshots: number;
   focusEngine: FocusScoreEngine | null;
   latestFocusScore: number;
+  prevFocusScore: number;
+  decaySlowUntil: number;
+  praiseArmed: boolean;
+  lastPraiseAt: number;
+  lastZeroInterventionAt: number;
   workOverrides: Array<{ app: string; domain?: string; expiresAt: number }>;
 }
 
 const state: OrchestratorState = {
   telemetryCollector: null,
   lastInterventionTime: 0,
+  lastStageInterventionAt: 0,
+  lastStageInterventionSeverity: 0 as Severity,
+  lastAnyInterventionShownAt: 0,
   snoozePressure: 0,
   snoozeTimestamps: [],
   currentSettings: null as unknown as UserSettings, // Lazily loaded after DB init
   activeInterventionId: null,
+  activeInterventionStartedAt: 0,
   activeInterventionCategories: null,
   interventionCategoriesById: new Map(),
   complianceSnapshots: 0,
   focusEngine: null,
   latestFocusScore: 100,
+  prevFocusScore: 100,
+  decaySlowUntil: 0,
+  praiseArmed: false,
+  lastPraiseAt: 0,
+  lastZeroInterventionAt: 0,
   workOverrides: [],
 };
 
@@ -197,19 +220,134 @@ function processTick(tick: TelemetryTick): void {
     if (!state.focusEngine) {
       state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
       state.latestFocusScore = 100;
+      state.prevFocusScore = 100;
     }
 
     if (tick.sessionReset) {
       state.focusEngine.reset(100);
       state.latestFocusScore = 100;
+      state.prevFocusScore = 100;
     } else {
+      const now = Date.now();
+      const overlayVisible = isInterventionOverlayVisible();
+
+      if (shouldTreatInterventionAsDismissed({
+        activeInterventionId: state.activeInterventionId,
+        overlayVisible,
+        startedAt: state.activeInterventionStartedAt,
+        now,
+        graceMs: 10_000,
+      })) {
+        const id = state.activeInterventionId!;
+        console.log('[orchestrator] Active intervention with no visible overlay \u2014 treating as dismissed', { id });
+        handleInterventionResponse(id, 'dismissed');
+      }
+
+      const decayScale = overlayVisible ? 0 : (now < state.decaySlowUntil ? 0.5 : 1);
       const res = state.focusEngine.tick({
         activeCategory: tick.activeCategory,
         appSwitchesLast5Min: tick.appSwitchesLast5Min,
         elapsedMs: tick.elapsedMs,
+        decayScale,
       });
       state.latestFocusScore = res.focusScore;
     }
+
+    // Arm praise once we dip below 85, then praise once we recover to 90+.
+    if (state.latestFocusScore < 85) state.praiseArmed = true;
+
+    const now = Date.now();
+    const overlayVisible = isInterventionOverlayVisible();
+    if (!overlayVisible && !state.activeInterventionId && state.praiseArmed && state.latestFocusScore >= 90 && now - state.lastPraiseAt > 60_000) {
+      state.praiseArmed = false;
+      state.lastPraiseAt = now;
+      const settings = ensureSettings();
+      const text = buildPraiseText(settings.persona);
+      sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
+        procrastinationScore: 0,
+        severity: 0 as Severity,
+        reasons: ['Great recovery'],
+        recommendation: {
+          mode: 'none',
+          persona: settings.persona,
+          text,
+          tts: { model: 'eleven_v3', stability: 45, speed: 1.02 },
+          cooldownSeconds: settings.cooldownSeconds,
+        },
+      });
+    }
+
+    // If focus hits 0, force a special intervention (no cooldown). Throttle to avoid loops.
+    if (
+      state.prevFocusScore > 0 &&
+      state.latestFocusScore <= 0 &&
+      !overlayVisible &&
+      !state.activeInterventionId &&
+      !isSnoozeActive(now) &&
+      hasInterventionGapElapsed({ lastShownAt: state.lastAnyInterventionShownAt, now, minGapMs: 5_000 }) &&
+      now - state.lastZeroInterventionAt > 2 * 60_000
+    ) {
+      state.lastZeroInterventionAt = now;
+      state.lastAnyInterventionShownAt = now;
+      const settings = ensureSettings();
+      const categories = {
+        activeApp: tick.appName,
+        activeCategory: tick.activeCategory,
+        ...(tick.activeDomain ? { activeDomain: tick.activeDomain } : {}),
+      } as any;
+
+      const activeTodos = database.getTodos().filter((t) => !t.done);
+      const nowMinutes = getNowMinutesInTimeZone(settings.timeZone);
+      const overdueTodos = activeTodos
+        .filter((t) => t.deadline)
+        .filter((t) => {
+          const dlMinutes = parseHHMMToMinutes(t.deadline!);
+          if (dlMinutes == null) return false;
+          return dlMinutes < nowMinutes;
+        })
+        .map((t) => ({ text: t.text, deadline: t.deadline! }));
+
+      const text = buildZeroFocusInterventionText(settings.persona, categories, {
+        activeTodos: activeTodos.map((t) => t.text),
+        overdueTodos,
+      });
+
+      const intervention: InterventionEvent = {
+        id: generateId(),
+        timestamp: new Date().toISOString(),
+        score: 100,
+        severity: 4 as Severity,
+        persona: settings.persona,
+        text,
+        userResponse: 'pending',
+        audioPlayed: false,
+      };
+
+      database.insertIntervention(intervention);
+      state.activeInterventionId = intervention.id;
+      state.activeInterventionStartedAt = Date.now();
+      state.activeInterventionCategories = { activeApp: tick.appName, ...(tick.activeDomain ? { activeDomain: tick.activeDomain } : {}) };
+      state.interventionCategoriesById.set(intervention.id, state.activeInterventionCategories);
+      state.complianceSnapshots = 0;
+      setActiveIntervention(intervention);
+      showInterventionOverlayWindow(intervention);
+      sendToRenderer(IPC_CHANNELS.ON_INTERVENTION, intervention);
+      sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
+        procrastinationScore: 100,
+        severity: 4 as Severity,
+        reasons: ['Focus hit 0'],
+        recommendation: {
+          mode: 'interrupt',
+          persona: settings.persona,
+          text,
+          tts: { model: 'eleven_v3', stability: 20, speed: 1.12 },
+          cooldownSeconds: settings.cooldownSeconds,
+        },
+        interventionId: intervention.id,
+      });
+    }
+
+    state.prevFocusScore = state.latestFocusScore;
 
     const snoozePressure = decaySnoozePressure();
     const procScore = clamp(Math.round((100 - state.latestFocusScore) + snoozePressure), 0, 100);
@@ -300,6 +438,12 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
       telemetryActive: true,
     });
 
+    // If severity drops (user refocuses), allow stage-based interventions to trigger again
+    // on future escalations.
+    if (scoreResult.severity < state.lastStageInterventionSeverity) {
+      state.lastStageInterventionSeverity = scoreResult.severity;
+    }
+
     // --- Compliance auto-dismiss check ---
     if (state.activeInterventionId && state.activeInterventionCategories) {
       const wasApp = state.activeInterventionCategories.activeApp;
@@ -319,7 +463,10 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         sendToRenderer(IPC_CHANNELS.ON_INTERVENTION_DISMISS, { interventionId });
         database.updateInterventionResponse(interventionId, 'dismissed');
         console.log(`[orchestrator] Auto-dismissed intervention ${interventionId} after compliance`);
+        clearActiveIntervention(interventionId);
+        closeInterventionOverlayWindow();
         state.activeInterventionId = null;
+        state.activeInterventionStartedAt = 0;
         state.activeInterventionCategories = null;
         state.complianceSnapshots = 0;
       }
@@ -327,17 +474,34 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
 
     // Check if we should intervene
     const now = Date.now();
+    if (isSnoozeActive(now)) {
+      console.log('[orchestrator] Snooze active \u2014 skipping intervention check');
+      return;
+    }
     const cooldownMs = settings.cooldownSeconds * 1000;
     const cooldownExpired = now - state.lastInterventionTime > cooldownMs;
     const meetsThreshold =
       scoreResult.procrastinationScore >= settings.scoreThreshold;
     const hasRecommendation = scoreResult.recommendation.mode !== 'none';
+
+    const stageEscalated =
+      scoreResult.severity >= (1 as Severity) &&
+      scoreResult.severity > state.lastStageInterventionSeverity &&
+      now - state.lastStageInterventionAt > 20_000;
+
     console.log(
       `[orchestrator] Decision: source=${scoreSource} score=${scoreResult.procrastinationScore} meetsThreshold=${meetsThreshold} cooldownExpired=${cooldownExpired} hasRecommendation=${hasRecommendation} | app="${snapshot.categories.activeApp}" category="${snapshot.categories.activeCategory}" domain="${snapshot.categories.activeDomain ?? 'none'}" recentRatio=${(snapshot.signals.recentDistractRatio ?? 0).toFixed(2)} distracting=${snapshot.signals.distractingMinutes}min session=${snapshot.signals.sessionMinutes}min`
     );
 
-    if (meetsThreshold && cooldownExpired && hasRecommendation) {
+    const shouldIntervene =
+      !state.activeInterventionId &&
+      hasRecommendation &&
+      hasInterventionGapElapsed({ lastShownAt: state.lastAnyInterventionShownAt, now, minGapMs: 5_000 }) &&
+      (stageEscalated || (meetsThreshold && cooldownExpired));
+
+    if (shouldIntervene) {
       let interventionText: string | null = null;
+      const forceLocalScript = stageEscalated;
 
       // Compute overdue todos (tasks past their deadline)
       const activeTodos = database.getTodos().filter((t) => !t.done);
@@ -351,7 +515,7 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         })
         .map((t) => ({ text: t.text, deadline: t.deadline! }));
 
-      if (settings.scriptSource === 'gemini' && settings.geminiApiKey) {
+      if (!forceLocalScript && settings.scriptSource === 'gemini' && settings.geminiApiKey) {
         // Use context-aware generation when context info is available
         if (snapshot.categories.contextOverride || snapshot.categories.contextTodo || overdueTodos.length > 0) {
           interventionText = await generateContextAwareScript(
@@ -423,21 +587,18 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
 
       // Track active intervention for compliance auto-dismiss
       state.activeInterventionId = intervention.id;
+      state.activeInterventionStartedAt = Date.now();
       state.activeInterventionCategories = {
         activeApp: snapshot.categories.activeApp,
         activeDomain: snapshot.categories.activeDomain,
       };
       state.interventionCategoriesById.set(intervention.id, state.activeInterventionCategories);
       state.complianceSnapshots = 0;
+      state.lastAnyInterventionShownAt = now;
 
-      // Ensure the window is visible so the renderer processes IPC immediately
-      // (macOS deprioritizes hidden windows, causing stale interventions)
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) {
-        if (!win.isVisible()) win.show();
-        win.focus();
-      }
-
+      // Show an always-on-top popup window to interrupt the user even when noRot isn't focused.
+      setActiveIntervention(intervention);
+      showInterventionOverlayWindow(intervention);
       sendToRenderer(IPC_CHANNELS.ON_INTERVENTION, intervention);
       console.log(
         `[orchestrator] INTERVENTION FIRED: id=${intervention.id} score=${intervention.score} severity=${intervention.severity}`
@@ -458,7 +619,16 @@ async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
         });
       }
 
-      state.lastInterventionTime = now;
+      if (stageEscalated) {
+        state.lastStageInterventionSeverity = scoreResult.severity;
+        state.lastStageInterventionAt = now;
+      }
+
+      if (!stageEscalated) {
+        state.lastInterventionTime = now;
+        state.lastStageInterventionSeverity = Math.max(state.lastStageInterventionSeverity, scoreResult.severity) as Severity;
+        state.lastStageInterventionAt = now;
+      }
     }
   } catch (err) {
     console.error('[orchestrator] Error processing snapshot:', err);
@@ -479,12 +649,22 @@ export function startTelemetry(): void {
   state.snoozePressure = 0;
   state.snoozeTimestamps = [];
   state.lastInterventionTime = 0;
+  state.lastStageInterventionAt = 0;
+  state.lastStageInterventionSeverity = 0 as Severity;
+  state.lastAnyInterventionShownAt = 0;
   state.activeInterventionId = null;
+  state.activeInterventionStartedAt = 0;
   state.activeInterventionCategories = null;
+  clearActiveIntervention();
   state.interventionCategoriesById = new Map();
   state.complianceSnapshots = 0;
   state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
   state.latestFocusScore = 100;
+  state.prevFocusScore = 100;
+  state.decaySlowUntil = 0;
+  state.praiseArmed = false;
+  state.lastPraiseAt = 0;
+  state.lastZeroInterventionAt = 0;
   state.workOverrides = database.getWorkOverrides();
   pruneWorkOverrides(Date.now());
 
@@ -540,6 +720,7 @@ export function handleInterventionResponse(
   response: 'snoozed' | 'dismissed' | 'working'
 ): void {
   database.updateInterventionResponse(eventId, response);
+  clearActiveIntervention(eventId);
 
   const categoriesForThisIntervention =
     state.interventionCategoriesById.get(eventId) ??
@@ -550,6 +731,7 @@ export function handleInterventionResponse(
   // Clear compliance tracking so auto-dismiss won't fire after user responds
   if (state.activeInterventionId === eventId) {
     state.activeInterventionId = null;
+    state.activeInterventionStartedAt = 0;
     state.activeInterventionCategories = null;
     state.complianceSnapshots = 0;
   }
@@ -560,6 +742,9 @@ export function handleInterventionResponse(
     if (state.telemetryCollector) {
       state.telemetryCollector.addSnooze();
     }
+  } else if (response === 'dismissed') {
+    // Give a brief grace period so focus doesn't nosedive instantly after acknowledging the popup.
+    state.decaySlowUntil = Date.now() + 60_000;
   } else if (response === 'working') {
     if (categoriesForThisIntervention?.activeApp) {
       // Treat the intervention-triggering app/domain as productive for 2 hours.
