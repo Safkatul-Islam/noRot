@@ -31,7 +31,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="w-[80px] shrink-0" />
       </div>
 
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
         <Sidebar onToggleTodo={() => setTodoPanelOpen((v) => !v)} />
         <div className="flex flex-col flex-1 min-w-0">
           <main className="flex-1 overflow-y-auto pt-6 px-6 pb-12 flex flex-col min-h-0">

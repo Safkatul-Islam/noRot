@@ -17,7 +17,7 @@ export function AudioControls({ activeInterventionId, onRespond }: AudioControls
   const { muted, updateMuted } = useSettings();
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap">
       <PillButton
         onClick={updateMuted}
         active={muted}
