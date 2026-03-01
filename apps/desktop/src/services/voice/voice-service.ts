@@ -1,5 +1,5 @@
 import type { ScoreResponse, Persona, Severity } from '@norot/shared';
-import { PERSONAS } from '@norot/shared';
+import { PERSONAS, resolveVoiceId } from '@norot/shared';
 import { ElevenLabsClient, ElevenLabsClientError } from './elevenlabs-client';
 import { LocalTTS } from './local-tts';
 import { getScript } from './script-builder';
@@ -20,6 +20,7 @@ export class VoiceService {
   private ttsEngine: 'auto' | 'elevenlabs' | 'local' = 'auto';
   private muted = false;
   private toughLoveExplicitAllowed = false;
+  private selectedVoiceId = '';
 
   constructor() {
     this.client = new ElevenLabsClient();
@@ -37,11 +38,15 @@ export class VoiceService {
     this.toughLoveExplicitAllowed = allowed;
   }
 
+  setSelectedVoiceId(voiceId: string): void {
+    this.selectedVoiceId = voiceId;
+  }
+
   async speak(response: ScoreResponse, onBoundary?: () => void): Promise<VoiceSpeakResult> {
     if (this.muted) return { source: 'none' };
 
     const text = getScript(response);
-    const voiceId = PERSONAS[response.recommendation.persona].voiceId;
+    const voiceId = resolveVoiceId(this.selectedVoiceId, response.recommendation.persona);
     const ttsSettings = response.recommendation.tts;
     const isExplicitToughLove =
       response.recommendation.persona === 'tough_love' && this.toughLoveExplicitAllowed;

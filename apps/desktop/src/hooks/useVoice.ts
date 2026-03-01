@@ -17,6 +17,7 @@ export function useVoice() {
   const settingsMuted = useSettingsStore((s) => s.muted);
   const ttsEngine = useSettingsStore((s) => s.ttsEngine);
   const toughLoveExplicitAllowed = useSettingsStore((s) => s.toughLoveExplicitAllowed);
+  const selectedVoiceId = useSettingsStore((s) => s.selectedVoiceId);
   const snoozedUntil = useSnoozeStore((s) => s.snoozedUntil);
   const snoozeActive = typeof snoozedUntil === 'number' && snoozedUntil > Date.now();
   const muted = settingsMuted || snoozeActive;
@@ -197,6 +198,10 @@ export function useVoice() {
   useEffect(() => {
     serviceRef.current?.setToughLoveExplicitAllowed(toughLoveExplicitAllowed);
   }, [toughLoveExplicitAllowed]);
+
+  useEffect(() => {
+    serviceRef.current?.setSelectedVoiceId(selectedVoiceId);
+  }, [selectedVoiceId]);
 
   const mute = useCallback(() => {
     serviceRef.current?.mute();
