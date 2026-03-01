@@ -1,5 +1,5 @@
 import type { Persona, Severity, TodoItem } from '@norot/shared';
-import { PERSONAS } from '@norot/shared';
+import { PERSONAS, resolveVoiceId } from '@norot/shared';
 import * as database from './database';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1';
@@ -217,9 +217,10 @@ async function patchCoachAgentConfig(
   apiKey: string,
   agentId: string,
   persona: Persona,
-  explicitToughLove: boolean
+  explicitToughLove: boolean,
+  selectedVoiceId: string
 ): Promise<void> {
-  const voiceId = PERSONAS[persona].voiceId;
+  const voiceId = resolveVoiceId(selectedVoiceId, persona);
   const { prompt, firstMessage } = buildCoachPrompt(persona, explicitToughLove);
 
   const res = await fetch(`${BASE_URL}/convai/agents/${encodeURIComponent(agentId)}`, {
@@ -271,6 +272,8 @@ export async function ensureAgent(
   const settings = database.getSettings();
   const explicitToughLove = persona === 'tough_love' && settings.toughLoveExplicitAllowed === true;
 
+  const selectedVoiceId = settings.selectedVoiceId ?? '';
+
   // If we already have an agent for this persona, try to reuse it
   if (settings.elevenLabsAgentId && settings.elevenLabsAgentPersona === persona) {
     console.log('[elevenlabs-agent] Reusing existing agent:', settings.elevenLabsAgentId);
@@ -279,7 +282,7 @@ export async function ensureAgent(
     // One-time PATCH to apply updated prompt + timeouts
     if ((settings.elevenLabsAgentVersion ?? 0) < AGENT_CONFIG_VERSION) {
       try {
-        await patchCoachAgentConfig(apiKey, settings.elevenLabsAgentId, persona, explicitToughLove);
+        await patchCoachAgentConfig(apiKey, settings.elevenLabsAgentId, persona, explicitToughLove, selectedVoiceId);
         database.updateSetting('elevenLabsAgentVersion', AGENT_CONFIG_VERSION);
       } catch (patchErr) {
         console.warn('[elevenlabs-agent] Could not patch agent config, will recreate:', patchErr);
@@ -313,7 +316,7 @@ export async function ensureAgent(
 
   // Create a new agent
   console.log('[elevenlabs-agent] Creating new agent for persona:', persona);
-  const agentId = await createAgent(apiKey, persona, explicitToughLove);
+  const agentId = await createAgent(apiKey, persona, explicitToughLove, selectedVoiceId);
 
   // Get signed URL before saving — if this fails, we don't persist a bad agentId
   const signedUrl = await getSignedUrl(apiKey, agentId);
@@ -363,6 +366,7 @@ export async function ensureCheckinAgent(
   console.log('[elevenlabs-agent] Creating check-in agent for severity:', context.severity);
   const settings = database.getSettings();
   const explicitToughLove = persona === 'tough_love' && settings.toughLoveExplicitAllowed === true;
+  const selectedVoiceId = settings.selectedVoiceId ?? '';
 
   // Clean up previous check-in agent if one exists
   if (lastCheckinAgentId) {
@@ -374,7 +378,7 @@ export async function ensureCheckinAgent(
 
   let agentId: string;
   try {
-    agentId = await createCheckinAgent(apiKey, persona, context, explicitToughLove);
+    agentId = await createCheckinAgent(apiKey, persona, context, explicitToughLove, selectedVoiceId);
   } catch (err) {
     // Creation failed — nothing to clean up
     throw err;
@@ -396,9 +400,10 @@ async function createCheckinAgent(
   apiKey: string,
   persona: Persona,
   context: CheckinContext,
-  explicitToughLove: boolean
+  explicitToughLove: boolean,
+  selectedVoiceId: string
 ): Promise<string> {
-  const voiceId = PERSONAS[persona].voiceId;
+  const voiceId = resolveVoiceId(selectedVoiceId, persona);
   const style = PERSONA_STYLES[persona];
 
   const safeApp = JSON.stringify(context.activeApp);
@@ -488,8 +493,8 @@ async function createCheckinAgent(
   return data.agent_id;
 }
 
-async function createAgent(apiKey: string, persona: Persona, explicitToughLove: boolean): Promise<string> {
-  const voiceId = PERSONAS[persona].voiceId;
+async function createAgent(apiKey: string, persona: Persona, explicitToughLove: boolean, selectedVoiceId: string): Promise<string> {
+  const voiceId = resolveVoiceId(selectedVoiceId, persona);
   const { prompt, firstMessage } = buildCoachPrompt(persona, explicitToughLove);
 
   const body = {

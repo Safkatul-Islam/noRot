@@ -24,6 +24,35 @@ export const PERSONAS: Record<Persona, { label: string; description: string; voi
   tough_love: { label: 'Tough Love', description: 'Aggressive and funny', voiceId: 'N2lVS1w4EtoT3dr4eOWO' },
 };
 
+export interface VoicePreset {
+  id: string;
+  label: string;
+  voiceId: string;
+  gender: 'M' | 'F';
+  tone: string;
+  previewText: string;
+}
+
+export const VOICE_PRESETS: VoicePreset[] = [
+  { id: 'sarah', label: 'Sarah', voiceId: 'EXAVITQu4vr4xnSDxMaL', gender: 'F', tone: 'Warm, conversational', previewText: 'Hey, let\'s get back on track. You\'ve got this.' },
+  { id: 'daniel', label: 'Daniel', voiceId: 'onwK4e9ZLuTAKqWW03F9', gender: 'M', tone: 'Authoritative, calm', previewText: 'Time to refocus. What\'s the next step?' },
+  { id: 'callum', label: 'Callum', voiceId: 'N2lVS1w4EtoT3dr4eOWO', gender: 'M', tone: 'Intense, direct', previewText: 'Stop scrolling. Get back to work. Now.' },
+  { id: 'charlotte', label: 'Charlotte', voiceId: 'XB0fDUnXU5powFXDhCwa', gender: 'F', tone: 'Elegant, confident', previewText: 'You deserve to feel productive. Let\'s begin.' },
+  { id: 'brian', label: 'Brian', voiceId: 'nPczCjzI2devNBz1zQrb', gender: 'M', tone: 'Energetic, friendly', previewText: 'Come on, let\'s crush it! What are we doing next?' },
+  { id: 'lily', label: 'Lily', voiceId: 'pFZP5JQG7iQjIQuC4Bku', gender: 'F', tone: 'Soft, empathetic', previewText: 'It\'s okay to take a moment. Ready when you are.' },
+];
+
+/**
+ * Returns the user's selected voice ID, or falls back to the persona's default voice.
+ */
+export function resolveVoiceId(selectedVoiceId: string, persona: Persona): string {
+  if (selectedVoiceId) {
+    const preset = VOICE_PRESETS.find((v) => v.id === selectedVoiceId || v.voiceId === selectedVoiceId);
+    if (preset) return preset.voiceId;
+  }
+  return PERSONAS[persona].voiceId;
+}
+
 // Keep in sync with apps/api/app/constants.py.
 export const SCORING_WEIGHTS = {
   distractRatio: 0.55,

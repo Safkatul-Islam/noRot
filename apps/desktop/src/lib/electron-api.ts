@@ -28,7 +28,9 @@ export interface UserSettings {
   lastDailySetupDate: string;
   elevenLabsAgentId: string;
   elevenLabsAgentPersona: string;
+  elevenLabsAgentVersion: number;
   monitoringEnabled: boolean;
+  selectedVoiceId: string;
 }
 
 export interface UsageHistoryPoint {

@@ -31,6 +31,7 @@ let mockSettings: Record<string, unknown> = {
   elevenLabsAgentPersona: '',
   elevenLabsAgentVersion: 0,
   monitoringEnabled: true,
+  selectedVoiceId: '',
 };
 
 let mockSnoozedUntil: number | null = null;

@@ -106,6 +106,7 @@ export interface UserSettings {
   elevenLabsAgentPersona: string;
   elevenLabsAgentVersion: number;
   monitoringEnabled: boolean;
+  selectedVoiceId: string;
 }
 
 export const KNOWN_BROWSERS = [
@@ -186,4 +187,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   elevenLabsAgentPersona: '',
   elevenLabsAgentVersion: 0,
   monitoringEnabled: true,
+  selectedVoiceId: '',
 };

@@ -88,6 +88,7 @@ interface SettingsState {
   accentColor: AccentColorId;
   hasCompletedOnboarding: boolean;
   lastDailySetupDate: string;
+  selectedVoiceId: string;
   setPersona: (persona: Persona) => void;
   setThreshold: (threshold: number) => void;
   setCooldown: (seconds: number) => void;
@@ -98,6 +99,7 @@ interface SettingsState {
   setAccentColor: (color: AccentColorId) => void;
   setHasCompletedOnboarding: (val: boolean) => void;
   setLastDailySetupDate: (date: string) => void;
+  setSelectedVoiceId: (voiceId: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -113,6 +115,7 @@ export const useSettingsStore = create<SettingsState>()(
       accentColor: 'violet',
       hasCompletedOnboarding: false,
       lastDailySetupDate: '',
+      selectedVoiceId: '',
       setPersona: (persona) => set({ persona }),
       setThreshold: (scoreThreshold) => set({ scoreThreshold }),
       setCooldown: (cooldownSeconds) => set({ cooldownSeconds }),
@@ -130,6 +133,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAccentColor: (accentColor) => set({ accentColor }),
       setHasCompletedOnboarding: (hasCompletedOnboarding) => set({ hasCompletedOnboarding }),
       setLastDailySetupDate: (lastDailySetupDate) => set({ lastDailySetupDate }),
+      setSelectedVoiceId: (selectedVoiceId) => set({ selectedVoiceId }),
     }),
     {
       name: 'norot-settings',

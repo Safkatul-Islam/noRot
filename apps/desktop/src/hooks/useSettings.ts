@@ -14,15 +14,15 @@ function todayDateStr(): string {
 export function useSettings() {
   const {
     persona, interventionFrequency, muted, ttsEngine, toughLoveExplicitAllowed,
-    hasCompletedOnboarding, lastDailySetupDate,
+    hasCompletedOnboarding, lastDailySetupDate, selectedVoiceId,
     setPersona, setThreshold, setCooldown, setInterventionFrequency, toggleMute, setTtsEngine, setToughLoveExplicitAllowed,
-    setHasCompletedOnboarding, setLastDailySetupDate,
+    setHasCompletedOnboarding, setLastDailySetupDate, setSelectedVoiceId,
   } = useSettingsStore();
 
   useEffect(() => {
     const api = getNorotAPI();
     api.getSettings().then(
-      (settings: { persona: Persona; toughLoveExplicitAllowed?: boolean; scoreThreshold: number; cooldownSeconds: number; muted: boolean; ttsEngine?: 'auto' | 'elevenlabs' | 'local'; hasCompletedOnboarding?: boolean; lastDailySetupDate?: string }) => {
+      (settings: { persona: Persona; toughLoveExplicitAllowed?: boolean; scoreThreshold: number; cooldownSeconds: number; muted: boolean; ttsEngine?: 'auto' | 'elevenlabs' | 'local'; hasCompletedOnboarding?: boolean; lastDailySetupDate?: string; selectedVoiceId?: string }) => {
         setPersona(settings.persona);
         setToughLoveExplicitAllowed(settings.toughLoveExplicitAllowed ?? false);
         setThreshold(settings.scoreThreshold);
@@ -30,6 +30,7 @@ export function useSettings() {
         if (settings.muted !== muted) toggleMute();
         setHasCompletedOnboarding(settings.hasCompletedOnboarding ?? false);
         setLastDailySetupDate(settings.lastDailySetupDate ?? '');
+        setSelectedVoiceId(settings.selectedVoiceId ?? '');
 
         // Snap existing threshold + cooldown to the closest frequency preset
         const level = frequencyFromSettings(settings.scoreThreshold, settings.cooldownSeconds);
@@ -88,6 +89,24 @@ export function useSettings() {
     } catch (err) {
       console.error('[useSettings] Failed to update muted setting, reverting:', err);
       toggleMute(); // revert optimistic update
+    }
+  };
+
+  const updateSelectedVoiceId = async (voiceId: string) => {
+    const prev = selectedVoiceId;
+    setSelectedVoiceId(voiceId);
+    const api = getNorotAPI();
+    try {
+      await api.updateSettings({
+        selectedVoiceId: voiceId,
+        // Clear cached agent so it gets recreated with the new voice
+        elevenLabsAgentId: '',
+        elevenLabsAgentPersona: '',
+        elevenLabsAgentVersion: 0,
+      });
+    } catch (err) {
+      console.error('[useSettings] Failed to update voice, reverting:', err);
+      setSelectedVoiceId(prev);
     }
   };
 
@@ -161,6 +180,8 @@ export function useSettings() {
     updateFrequency,
     updateMuted,
     updateTtsEngine,
+    selectedVoiceId,
+    updateSelectedVoiceId,
     completeOnboarding,
     completeDailySetup,
     continueSession,

@@ -17,7 +17,7 @@ import { useAppStore } from '@/stores/app-store';
 import { useSettingsStore, ACCENT_PRESETS, ACCENT_IDS } from '@/stores/settings-store';
 import type { AccentColorId } from '@/stores/settings-store';
 import { useStartupFlowStore } from '@/stores/startup-flow-store';
-import { SEVERITY_BANDS, PERSONAS, INTERVENTION_SCRIPTS, stripEmotionTags } from '@norot/shared';
+import { SEVERITY_BANDS, PERSONAS, INTERVENTION_SCRIPTS, stripEmotionTags, VOICE_PRESETS, resolveVoiceId } from '@norot/shared';
 import type { Severity, Persona } from '@norot/shared';
 import { cn } from '@/lib/utils';
 import {
@@ -41,6 +41,7 @@ import {
   ListTodo,
   Maximize2,
   RotateCcw,
+  Mic,
 } from 'lucide-react';
 
 function getPreviewMessages(persona: Persona): { severity: Severity; text: string }[] {
@@ -61,6 +62,8 @@ export function SettingsPage() {
     updateFrequency,
     updateMuted,
     updateTtsEngine,
+    selectedVoiceId,
+    updateSelectedVoiceId,
   } = useSettings();
 
   const connectionStatus = useAppStore((s) => s.connectionStatus);
@@ -84,6 +87,7 @@ export function SettingsPage() {
 
   const [testingIntervention, setTestingIntervention] = useState(false);
   const [interventionTestResult, setInterventionTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+  const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
 
   const [telemetryActive, setTelemetryActive] = useState<boolean | null>(null);
   const [permissionsGranted, setPermissionsGranted] = useState<boolean | null>(null);
@@ -338,7 +342,8 @@ export function SettingsPage() {
         const player = new AudioPlayer();
         if (elevenLabsConfigured) {
           const client = new ElevenLabsClient();
-          const audio = await client.synthesize('Testing voice.', 'EXAVITQu4vr4xnSDxMaL', { model: 'eleven_v3', stability: 50, speed: 1.0 });
+          const testVoiceId = resolveVoiceId(selectedVoiceId, persona);
+          const audio = await client.synthesize('Testing voice.', testVoiceId, { model: 'eleven_v3', stability: 50, speed: 1.0 });
           await player.play(audio);
         } else {
           await player.playUrl('audio/calm_friend/severity-1.mp3');
@@ -362,6 +367,32 @@ export function SettingsPage() {
       setInterventionTestResult('error');
     } finally {
       setTestingIntervention(false);
+    }
+  };
+
+  const previewVoice = async (presetId: string) => {
+    const preset = VOICE_PRESETS.find((v) => v.id === presetId);
+    if (!preset) return;
+    setPreviewingVoice(presetId);
+    try {
+      if (ttsEngine === 'local') {
+        if (!('speechSynthesis' in window)) throw new Error('Not available');
+        const utter = new SpeechSynthesisUtterance(preset.previewText);
+        await new Promise<void>((resolve, reject) => {
+          utter.onend = () => resolve();
+          utter.onerror = (e) => reject(new Error(e.error));
+          speechSynthesis.speak(utter);
+        });
+      } else if (elevenLabsConfigured) {
+        const client = new ElevenLabsClient();
+        const player = new AudioPlayer();
+        const audio = await client.synthesize(preset.previewText, preset.voiceId, { model: 'eleven_v3', stability: 50, speed: 1.0 });
+        await player.play(audio);
+      }
+    } catch {
+      // ignore preview errors
+    } finally {
+      setPreviewingVoice(null);
     }
   };
 
@@ -428,6 +459,98 @@ export function SettingsPage() {
           </GlassCard>
         </BlurFade>
       </div>
+
+      {/* Voice Selection */}
+      <BlurFade delay={0.07}>
+        <GlassCard>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Mic className="size-5 text-primary" />
+              Voice
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <p className="text-sm text-text-secondary leading-relaxed">
+              Choose a voice independently from persona. Persona controls personality; voice controls how it sounds.
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {/* Persona default option */}
+              <button
+                onClick={() => updateSelectedVoiceId('')}
+                className={cn(
+                  'relative rounded-lg border p-3 text-left transition-all',
+                  selectedVoiceId === ''
+                    ? 'border-primary/50 bg-primary/10'
+                    : 'border-white/[0.06] bg-[var(--color-glass-well)] hover:border-white/[0.12]',
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-text-primary">Default</span>
+                  {selectedVoiceId === '' && (
+                    <Check className="size-3.5 text-primary" />
+                  )}
+                </div>
+                <p className="text-[10px] text-text-muted mt-1">Use persona voice</p>
+              </button>
+
+              {/* Voice preset cards */}
+              {VOICE_PRESETS.map((preset) => {
+                const isActive = selectedVoiceId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    onClick={() => updateSelectedVoiceId(preset.id)}
+                    className={cn(
+                      'relative rounded-lg border p-3 text-left transition-all',
+                      isActive
+                        ? 'border-primary/50 bg-primary/10'
+                        : 'border-white/[0.06] bg-[var(--color-glass-well)] hover:border-white/[0.12]',
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-text-primary">{preset.label}</span>
+                      <div className="flex items-center gap-1">
+                        <span className={cn(
+                          'text-[9px] font-medium px-1.5 py-0.5 rounded-full',
+                          preset.gender === 'F'
+                            ? 'bg-rose-500/15 text-rose-400'
+                            : 'bg-blue-500/15 text-blue-400',
+                        )}>
+                          {preset.gender}
+                        </span>
+                        {isActive && <Check className="size-3.5 text-primary" />}
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-text-muted mt-1">{preset.tone}</p>
+                    {elevenLabsConfigured && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          previewVoice(preset.id);
+                        }}
+                        disabled={previewingVoice !== null}
+                        className="mt-2 flex items-center gap-1 text-[10px] text-primary hover:text-primary/80 transition-colors"
+                      >
+                        {previewingVoice === preset.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Play className="size-3" />
+                        )}
+                        {previewingVoice === preset.id ? 'Playing...' : 'Preview'}
+                      </button>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {!elevenLabsConfigured && (
+              <p className="text-[10px] text-text-muted text-center">
+                Add your ElevenLabs key below to preview voices.
+              </p>
+            )}
+          </CardContent>
+        </GlassCard>
+      </BlurFade>
 
       {/* Row 2: Accent Color + stacked Threshold/Cooldown */}
       <div className="grid grid-cols-12 gap-5 items-start">
