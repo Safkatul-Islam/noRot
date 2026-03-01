@@ -125,6 +125,9 @@ export function useVoice() {
         return;
       }
 
+      // Best-effort unlock right before playback (covers cases where initial prime didn't stick).
+      await voice.getPlayer().prime().catch(() => {});
+
       const result = await voice.speak(data, () => {
         useVoiceStatusStore.getState().triggerWordBoundary();
       });

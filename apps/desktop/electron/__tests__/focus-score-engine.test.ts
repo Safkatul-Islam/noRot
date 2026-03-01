@@ -7,17 +7,17 @@ describe('FocusScoreEngine', () => {
     expect(engine.getFocusScore()).toBe(100);
   });
 
-  it('drops one level every 5 seconds of distraction', () => {
+  it('drops one level every 10 seconds of distraction', () => {
     const engine = new FocusScoreEngine();
 
-    // 5 seconds of social → level 1 (score 75)
-    for (let i = 0; i < 5; i++) {
+    // 10 seconds of social → level 1 (score 75)
+    for (let i = 0; i < 10; i++) {
       engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(75);
 
-    // 5 more seconds → level 2 (score 50)
-    for (let i = 0; i < 5; i++) {
+    // 10 more seconds → level 2 (score 50)
+    for (let i = 0; i < 10; i++) {
       engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(50);
@@ -26,49 +26,29 @@ describe('FocusScoreEngine', () => {
   it('clamps at 0 after extended distraction', () => {
     const engine = new FocusScoreEngine();
 
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 60; i++) {
       engine.tick({ activeCategory: 'entertainment', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(0);
   });
 
-  it('recovers one level every 5 seconds of productive use (Locked In requires 10s)', () => {
+  it('returns to Locked In after 10 seconds of productive use', () => {
     const engine = new FocusScoreEngine();
 
     // Tank the score to level 4 (score 0)
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(0);
 
-    // 5 seconds → level 3 (score 25)
-    for (let i = 0; i < 5; i++) {
+    // 9 seconds: not enough
+    for (let i = 0; i < 9; i++) {
       engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
-    expect(engine.getFocusScore()).toBe(25);
+    expect(engine.getFocusScore()).toBe(0);
 
-    // 5 more seconds → level 2 (score 50)
-    for (let i = 0; i < 5; i++) {
-      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
-    }
-    expect(engine.getFocusScore()).toBe(50);
-
-    // 5 more seconds → level 1 (score 75)
-    for (let i = 0; i < 5; i++) {
-      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
-    }
-    expect(engine.getFocusScore()).toBe(75);
-
-    // Next 5 seconds: still level 1 — need a full 10s of productive work to get back to Locked In
-    for (let i = 0; i < 5; i++) {
-      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
-    }
-    expect(engine.getFocusScore()).toBe(75);
-
-    // 5 more seconds (10s total at level 1) → level 0 (score 100, Locked In)
-    for (let i = 0; i < 5; i++) {
-      engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
-    }
+    // 1 more second: back to Locked In
+    engine.tick({ activeCategory: 'productive', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     expect(engine.getFocusScore()).toBe(100);
   });
 
@@ -76,7 +56,7 @@ describe('FocusScoreEngine', () => {
     const engine = new FocusScoreEngine();
 
     // decayScale = 0 should NOT prevent decay in the simple engine
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       engine.tick({
         activeCategory: 'social',
         appSwitchesLast5Min: 0,
@@ -92,7 +72,7 @@ describe('FocusScoreEngine', () => {
     const engine = new FocusScoreEngine();
 
     // Drop to level 2
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       engine.tick({ activeCategory: 'social', appSwitchesLast5Min: 0, elapsedMs: 1000 });
     }
     expect(engine.getFocusScore()).toBe(50);

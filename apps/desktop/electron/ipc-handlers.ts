@@ -791,7 +791,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.HAS_ELEVENLABS_KEY, () => {
     const settings = database.getSettings();
-    return Boolean(settings.elevenLabsApiKey);
+    return Boolean(typeof settings.elevenLabsApiKey === 'string' && settings.elevenLabsApiKey.trim());
   });
 
   ipcMain.on(IPC_CHANNELS.VOICE_CHAT_OPEN, () => {

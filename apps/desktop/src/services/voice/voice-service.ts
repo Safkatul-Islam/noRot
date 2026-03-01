@@ -45,6 +45,10 @@ export class VoiceService {
   async speak(response: ScoreResponse, onBoundary?: () => void): Promise<VoiceSpeakResult> {
     if (this.muted) return { source: 'none' };
 
+    // Always keep audio single-source: a new request interrupts anything in progress.
+    // This prevents mixed playback (ElevenLabs + local) when events arrive close together.
+    this.stop();
+
     const text = getScript(response);
     const voiceId = resolveVoiceId(this.selectedVoiceId, response.recommendation.persona);
     const ttsSettings = response.recommendation.tts;
@@ -83,21 +87,6 @@ export class VoiceService {
       }
     }
 
-    // Prefer speaking the actual script via local TTS whenever ElevenLabs isn't available,
-    // so the voice always matches the on-screen message.
-    if (this.localTts.isAvailable()) {
-      try {
-        await this.localTts.speak(text, onBoundary);
-        return {
-          source: 'local',
-          error: elevenLabsError?.message,
-          errorCode: elevenLabsError?.statusCode,
-        };
-      } catch (err) {
-        console.warn('[VoiceService] Local TTS fallback failed:', err);
-      }
-    }
-
     // ElevenLabs-only mode — last-resort fallback audio only
     if (this.ttsEngine === 'elevenlabs') {
       try {
@@ -116,7 +105,7 @@ export class VoiceService {
       }
     }
 
-    // Auto mode — last-resort MP3 fallback
+    // Auto mode — fall back to local shipped MP3s
     try {
       await this.speakFallback(response.recommendation.persona, response.severity);
       return {

@@ -93,6 +93,7 @@ interface OrchestratorState {
   decaySlowUntil: number;
   praiseArmed: boolean;
   lastPraiseAt: number;
+  lastFocusAudioAt: number;
   lastZeroInterventionAt: number;
   workOverrides: Array<{ app: string; domain?: string; expiresAt: number }>;
 }
@@ -116,6 +117,7 @@ const state: OrchestratorState = {
   decaySlowUntil: 0,
   praiseArmed: false,
   lastPraiseAt: 0,
+  lastFocusAudioAt: 0,
   lastZeroInterventionAt: 0,
   workOverrides: [],
 };
@@ -140,6 +142,14 @@ function sendToRenderer(channel: string, data: unknown): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function focusScoreToSeverity(score: number): Severity {
+  if (score >= 100) return 0 as Severity;
+  if (score >= 75) return 1 as Severity;
+  if (score >= 50) return 2 as Severity;
+  if (score >= 25) return 3 as Severity;
+  return 4 as Severity;
 }
 
 function scoreToSeverity(score: number): Severity {
@@ -215,6 +225,8 @@ function decaySnoozePressure(): number {
 
 function processTick(tick: TelemetryTick): void {
   try {
+    const prevFocusScoreAtStart = state.latestFocusScore;
+
     if (!state.focusEngine) {
       state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100 });
       state.latestFocusScore = 100;
@@ -251,28 +263,64 @@ function processTick(tick: TelemetryTick): void {
       state.latestFocusScore = res.focusScore;
     }
 
-    // Arm praise once we dip below 65 ("Focused" band), then praise once we recover to 85+ ("Locked In").
-    if (state.latestFocusScore < 65) state.praiseArmed = true;
-
     const now = Date.now();
     const overlayVisible = isInterventionOverlayVisible();
-    if (!overlayVisible && !state.activeInterventionId && state.praiseArmed && state.latestFocusScore >= 85 && now - state.lastPraiseAt > 60_000) {
-      state.praiseArmed = false;
-      state.lastPraiseAt = now;
-      const settings = ensureSettings();
-      const text = buildPraiseText(settings.persona);
-      sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
-        procrastinationScore: 0,
-        severity: 0 as Severity,
-        reasons: ['Great recovery'],
-        recommendation: {
-          mode: 'none',
-          persona: settings.persona,
-          text,
-          tts: { model: 'eleven_v3', stability: 45, speed: 1.02 },
-          cooldownSeconds: 180,
-        },
-      });
+
+    // --- Focus-step audio cues ---
+    // Speak on focus-score boundaries (100->75, 75->50, etc).
+    // Praise when returning to 100 after being distracted.
+    if (!overlayVisible && !state.activeInterventionId) {
+      const prev = prevFocusScoreAtStart;
+      const cur = state.latestFocusScore;
+      const changed = Number.isFinite(prev) && Number.isFinite(cur) && cur !== prev;
+      const throttleOk = now - state.lastFocusAudioAt >= 1500;
+
+      if (changed && throttleOk) {
+        const settings = ensureSettings();
+
+        // Arm praise as soon as we dip below Locked In.
+        if (cur < 100) state.praiseArmed = true;
+
+        if (cur < prev) {
+          state.lastFocusAudioAt = now;
+          const sev = focusScoreToSeverity(cur);
+          const categories = {
+            activeApp: tick.appName,
+            activeCategory: tick.activeCategory,
+            ...(tick.activeDomain ? { activeDomain: tick.activeDomain } : {}),
+          } as any;
+          const text = buildInterventionText(sev, settings.persona, categories);
+          sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
+            procrastinationScore: clamp(100 - cur, 0, 100),
+            severity: sev,
+            reasons: ['Focus dropped'],
+            recommendation: {
+              mode: 'nudge',
+              persona: settings.persona,
+              text,
+              tts: { model: 'eleven_v3', stability: 35, speed: 1.06 },
+              cooldownSeconds: 180,
+            },
+          });
+        } else if (cur >= 100 && prev < 100 && state.praiseArmed && now - state.lastPraiseAt >= 10_000) {
+          state.praiseArmed = false;
+          state.lastPraiseAt = now;
+          state.lastFocusAudioAt = now;
+          const text = buildPraiseText(settings.persona);
+          sendToRenderer(IPC_CHANNELS.ON_PLAY_AUDIO, {
+            procrastinationScore: 0,
+            severity: 0 as Severity,
+            reasons: ['Locked in'],
+            recommendation: {
+              mode: 'none',
+              persona: settings.persona,
+              text,
+              tts: { model: 'eleven_v3', stability: 45, speed: 1.02 },
+              cooldownSeconds: 180,
+            },
+          });
+        }
+      }
     }
 
     // If focus hits 0, force a special intervention (no cooldown). Throttle to avoid loops.
@@ -665,6 +713,7 @@ export function startTelemetry(): void {
   state.decaySlowUntil = 0;
   state.praiseArmed = false;
   state.lastPraiseAt = 0;
+  state.lastFocusAudioAt = 0;
   state.lastZeroInterventionAt = 0;
   state.workOverrides = database.getWorkOverrides();
   pruneWorkOverrides(Date.now());

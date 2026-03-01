@@ -81,6 +81,11 @@ export function createTelemetryCollector(
   let lastBrowserUrlLookupValue: string | undefined;
   const BROWSER_URL_THROTTLE_MS = 2_500;
 
+  // Browser domain can be temporarily missing (library gaps, rapid title changes).
+  // Keep the last known domain for a short grace window to avoid category flapping.
+  const lastBrowserDomainByApp = new Map<string, { domain: string; at: number }>();
+  const BROWSER_DOMAIN_GRACE_MS = 3_000;
+
   // Context-aware override (non-blocking Gemini check)
   let lastContextResult: ContextResult | null = null;
   let lastContextResultKey = '';
@@ -247,8 +252,22 @@ export function createTelemetryCollector(
     // Classify and accumulate time
     const rules = getCategoryRules();
     const visionEnabled = getVisionEnabled();
-    const baseCategory = classifyApp(appName, rules, windowTitle, windowUrl);
-    const activeDomain = isBrowser(appName) ? extractDomain(windowUrl, windowTitle) : undefined;
+    let activeDomain: string | undefined;
+    if (isBrowser(appName)) {
+      const rawDomain = extractDomain(windowUrl, windowTitle);
+      const key = appName.toLowerCase();
+      if (rawDomain) {
+        activeDomain = rawDomain;
+        lastBrowserDomainByApp.set(key, { domain: rawDomain, at: now });
+      } else {
+        const prev = lastBrowserDomainByApp.get(key);
+        if (prev && now - prev.at <= BROWSER_DOMAIN_GRACE_MS) {
+          activeDomain = prev.domain;
+        }
+      }
+    }
+
+    const baseCategory = classifyApp(appName, rules, windowTitle, windowUrl, activeDomain);
     // Use a stable key so we don't restart CV inference constantly when window titles change.
     const activityKey = `${appName}|${activeDomain ?? ''}`;
     if (activityKey !== cachedActivityKey) {

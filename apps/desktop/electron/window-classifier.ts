@@ -87,14 +87,15 @@ export function classifyApp(
   appName: string,
   rules: CategoryRule[],
   windowTitle?: string,
-  windowUrl?: string
+  windowUrl?: string,
+  domainOverride?: string,
 ): 'productive' | 'neutral' | 'social' | 'entertainment' {
   const lower = appName.toLowerCase();
   const browser = isBrowser(appName);
 
   // For browsers: domain/title rules are more specific than app rules, so check them first.
-  if (browser && (windowTitle || windowUrl)) {
-    const domain = extractDomain(windowUrl, windowTitle);
+  if (browser && (domainOverride || windowTitle || windowUrl)) {
+    const domain = domainOverride ?? extractDomain(windowUrl, windowTitle);
     if (domain) {
       const domainLower = domain.toLowerCase();
 
