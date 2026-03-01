@@ -12,6 +12,11 @@ export interface UsageSignals {
   timeOfDayLocal: string; // "HH:MM"
   snoozesLast60Min: number;
   recentDistractRatio?: number;
+  /**
+   * Optional client-computed focus score (0-100, higher = more focused).
+   * When present, servers/clients should prefer it over ratio-based scoring.
+   */
+  focusScore?: number;
 }
 
 export interface UsageCategories {

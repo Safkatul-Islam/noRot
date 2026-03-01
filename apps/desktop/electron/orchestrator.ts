@@ -8,6 +8,7 @@ import type {
   Persona,
 } from '@norot/shared';
 import {
+  FocusScoreEngine,
   calculateScore,
   applySnoozeEscalation,
   generateReasons,
@@ -26,6 +27,7 @@ import { buildStableRecommendationText } from './recommendation-text';
 import { generateScript, generateContextAwareScript } from './gemini-client';
 import { clearContextCache } from './context-checker';
 import { getMainWindow } from './window-manager';
+import type { TelemetryTick } from './telemetry';
 
 function generateId(): string {
   return randomUUID();
@@ -76,6 +78,8 @@ interface OrchestratorState {
   activeInterventionId: string | null;
   activeInterventionCategories: { activeApp: string; activeDomain?: string } | null;
   complianceSnapshots: number;
+  focusEngine: FocusScoreEngine | null;
+  latestFocusScore: number;
 }
 
 const state: OrchestratorState = {
@@ -87,6 +91,8 @@ const state: OrchestratorState = {
   activeInterventionId: null,
   activeInterventionCategories: null,
   complianceSnapshots: 0,
+  focusEngine: null,
+  latestFocusScore: 100,
 };
 
 let settingsLoaded = false;
@@ -107,6 +113,15 @@ function sendToRenderer(channel: string, data: unknown): void {
   }
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function scoreToSeverity(score: number): Severity {
+  const band = SEVERITY_BANDS.find((b) => score >= b.scoreMin && score <= b.scoreMax);
+  return (band ? band.severity : 0) as Severity;
+}
+
 function decaySnoozePressure(): number {
   const now = Date.now();
   const cutoff = now - SNOOZE_PRESSURE_DURATION_MIN * 60 * 1000;
@@ -123,10 +138,54 @@ function decaySnoozePressure(): number {
   return state.snoozeTimestamps.length * SNOOZE_PRESSURE_POINTS;
 }
 
+function processTick(tick: TelemetryTick): void {
+  try {
+    if (!state.focusEngine) {
+      state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+      state.latestFocusScore = 100;
+    }
+
+    if (tick.sessionReset) {
+      state.focusEngine.reset(100);
+      state.latestFocusScore = 100;
+    } else {
+      const res = state.focusEngine.tick({
+        activeCategory: tick.activeCategory,
+        appSwitchesLast5Min: tick.appSwitchesLast5Min,
+        elapsedMs: tick.elapsedMs,
+      });
+      state.latestFocusScore = res.focusScore;
+    }
+
+    const snoozePressure = decaySnoozePressure();
+    const procScore = clamp(Math.round((100 - state.latestFocusScore) + snoozePressure), 0, 100);
+    const baseSeverity = scoreToSeverity(procScore);
+    const severity = applySnoozeEscalation(baseSeverity, tick.snoozesLast60Min);
+
+    sendToRenderer(IPC_CHANNELS.ON_LIVE_SCORE_UPDATE, {
+      procrastinationScore: procScore,
+      severity,
+    });
+
+    updateTrayState({
+      score: procScore,
+      severity,
+      activeApp: tick.appName,
+      activeCategory: tick.activeCategory,
+      activeDomain: tick.activeDomain,
+      telemetryActive: true,
+    });
+  } catch (err) {
+    console.error('[orchestrator] Error processing tick:', err);
+  }
+}
+
 async function processSnapshot(snapshot: UsageSnapshot): Promise<void> {
   try {
     const settings = ensureSettings();
     const isExplicitToughLove = settings.persona === 'tough_love' && settings.toughLoveExplicitAllowed === true;
+
+    snapshot.signals.focusScore = state.latestFocusScore;
 
     // Store the raw snapshot
     database.insertSnapshot(snapshot.timestamp, JSON.stringify(snapshot));
@@ -368,6 +427,8 @@ export function startTelemetry(): void {
   state.activeInterventionId = null;
   state.activeInterventionCategories = null;
   state.complianceSnapshots = 0;
+  state.focusEngine = new FocusScoreEngine({ initialFocusScore: 100, recoveryPerSec: 2 });
+  state.latestFocusScore = 100;
 
   state.telemetryCollector = createTelemetryCollector(
     () => ensureSettings().categoryRules,
@@ -375,6 +436,7 @@ export function startTelemetry(): void {
     processSnapshot,
     () => ensureSettings().geminiApiKey,
     () => database.getTodos().filter((t) => !t.done),
+    processTick,
   );
   state.telemetryCollector.start();
 
@@ -391,6 +453,8 @@ export function stopTelemetry(): void {
     state.telemetryCollector.stop();
     state.telemetryCollector = null;
   }
+  state.focusEngine = null;
+  state.latestFocusScore = 100;
 
   // Set tray to inactive/gray
   updateTrayState({

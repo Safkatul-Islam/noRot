@@ -10,6 +10,7 @@ function makeSnapshot(overrides: {
   snoozesLast60Min?: number;
   timeOfDayLocal?: string;
   recentDistractRatio?: number;
+  focusScore?: number;
   focusIntent?: UsageSnapshot['focusIntent'];
   categories?: Partial<UsageSnapshot['categories']>;
 } = {}): UsageSnapshot {
@@ -25,6 +26,7 @@ function makeSnapshot(overrides: {
       snoozesLast60Min: overrides.snoozesLast60Min ?? 0,
       timeOfDayLocal: overrides.timeOfDayLocal ?? '14:00',
       recentDistractRatio: overrides.recentDistractRatio,
+      focusScore: overrides.focusScore,
     },
     categories: {
       activeApp: overrides.categories?.activeApp ?? 'VSCode',
@@ -35,6 +37,19 @@ function makeSnapshot(overrides: {
 }
 
 describe('calculateScore', () => {
+  it('prefers client focusScore when present', () => {
+    const snapshot = makeSnapshot({
+      recentDistractRatio: 1.0,
+      distractingMinutes: 10,
+      sessionMinutes: 10,
+      categories: { activeApp: 'Chrome', activeCategory: 'entertainment' },
+      focusScore: 80,
+    });
+
+    const { score } = calculateScore(snapshot, 5);
+    expect(score).toBe(25);
+  });
+
   it('fully productive session scores 0', () => {
     const snapshot = makeSnapshot({
       sessionMinutes: 10,

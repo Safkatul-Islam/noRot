@@ -1,184 +1,379 @@
-import { powerMonitor } from 'electron'
-import type { UsageSnapshot } from '@norot/shared'
+import { powerMonitor } from 'electron';
+import type { UsageSnapshot, TodoItem } from '@norot/shared';
+import type { CategoryRule } from './types';
+import { classifyApp, extractDomain, isBrowser } from './window-classifier';
+import { createActivityClassifier, type ActivityClassification } from './activity/activity-classifier';
+import { checkContextRelevance, type ContextResult } from './context-checker';
 
-import { getActiveWindow } from './active-window'
-import type { CategoryRule, WorkOverride } from './database'
-import { classifyActiveWindow } from './window-classifier'
+// Cached dynamic import for ESM-only get-windows
+let getActiveWindow: (() => Promise<any>) | null = null;
+async function activeWindow() {
+  if (!getActiveWindow) {
+    const mod = await import('get-windows');
+    getActiveWindow = mod.activeWindow;
+  }
+  return getActiveWindow();
+}
+
+let permissionWarningShown = false;
+let permissionConfirmedShown = false;
+
+export interface TelemetryCollector {
+  start(): void;
+  stop(): void;
+  isActive(): boolean;
+  addSnooze(): void;
+}
 
 export interface TelemetryTick {
-  timestamp: number
-  elapsedMs: number
-  snapshotLike: UsageSnapshot
+  elapsedMs: number;
+  appName: string;
+  activeCategory: UsageSnapshot['categories']['activeCategory'];
+  activeDomain?: string;
+  appSwitchesLast5Min: number;
+  idleSeconds: number;
+  snoozesLast60Min: number;
+  sessionReset: boolean;
 }
 
-export interface TelemetryOptions {
-  getRules: () => CategoryRule[]
-  getWorkOverrides: () => WorkOverride[]
-}
+export function createTelemetryCollector(
+  getCategoryRules: () => CategoryRule[],
+  getVisionEnabled: () => boolean,
+  onSnapshot: (snapshot: UsageSnapshot) => void | Promise<void>,
+  getGeminiApiKey: () => string,
+  getActiveTodos: () => TodoItem[],
+  onTick?: (tick: TelemetryTick) => void,
+): TelemetryCollector {
+  let running = false;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let pollInFlight = false;
+  const activityClassifier = createActivityClassifier();
+  let cachedActivity: ActivityClassification | null = null;
+  let cachedActivityKey = '';
 
-function isDistracting(category: UsageSnapshot['categories']['activeCategory']): boolean {
-  return category === 'social' || category === 'entertainment'
-}
+  // Context-aware override (non-blocking Gemini check)
+  let lastContextResult: ContextResult | null = null;
+  let lastContextResultKey = '';
+  let lastContextCheckTime = 0;
+  const CONTEXT_CHECK_THROTTLE_MS = 15_000; // 15 seconds between Gemini calls
 
-function bucket(category: UsageSnapshot['categories']['activeCategory']): 'productive' | 'distracting' | 'neutral' {
-  if (category === 'productive') return 'productive'
-  if (isDistracting(category)) return 'distracting'
-  return 'neutral'
-}
+  // Session counters
+  let sessionStartTime = Date.now();
+  let productiveMs = 0;
+  let distractingMs = 0;
+  let neutralMs = 0;
+  let lastPollTime = Date.now();
+  let lastAppName = '';
+  let tickCount = 0;
+  const snoozeTimestamps: number[] = [];
 
-export class TelemetryService {
-  private readonly options: TelemetryOptions
-  private timer: NodeJS.Timeout | null = null
-  private lastTickTs: number | null = null
+  // Rolling time slices for distraction ratio (short window for responsiveness)
+  const timeSlices: { timestamp: number; durationMs: number; category: string }[] = [];
+  const RECENT_DISTRACT_WINDOW_MIN = 2;
 
-  private sessionSeconds = 0
-  private productiveSeconds = 0
-  private distractingSeconds = 0
-  private neutralSeconds = 0
+  // App switch tracking (sliding 5-min window)
+  const switchTimestamps: number[] = [];
 
-  private appSwitchTimestamps: number[] = []
-  private idleWindow: number[] = []
-  private distractWindow: number[] = []
-  private snoozeTimestamps: number[] = []
+  // Idle tracking
+  let consecutiveIdleSeconds = 0;
+  const IDLE_RESET_THRESHOLD = 10 * 60; // 10 minutes
 
-  private lastApp: string | null = null
-
-  private tickCount = 0
-
-  onTick: ((tick: TelemetryTick) => void) | null = null
-  onSnapshot: ((snapshot: UsageSnapshot) => void) | null = null
-
-  constructor(options: TelemetryOptions) {
-    this.options = options
+  function resetSession() {
+    sessionStartTime = Date.now();
+    productiveMs = 0;
+    distractingMs = 0;
+    neutralMs = 0;
+    lastAppName = '';
+    tickCount = 0;
+    switchTimestamps.length = 0;
+    timeSlices.length = 0;
+    consecutiveIdleSeconds = 0;
   }
 
-  isActive(): boolean {
-    return this.timer !== null
+  function countSwitchesLast5Min(): number {
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    // Remove old entries
+    while (switchTimestamps.length > 0 && switchTimestamps[0] < cutoff) {
+      switchTimestamps.shift();
+    }
+    return switchTimestamps.length;
   }
 
-  start(): void {
-    if (this.timer) return
-    this.resetSession('start')
-    this.lastTickTs = Date.now()
-
-    powerMonitor.on('lock-screen', this.onLockScreen)
-
-    this.timer = setInterval(() => void this.tick(), 1000)
+  function countSnoozesLast60Min(): number {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    while (snoozeTimestamps.length > 0 && snoozeTimestamps[0] < cutoff) {
+      snoozeTimestamps.shift();
+    }
+    return snoozeTimestamps.length;
   }
 
-  stop(): void {
-    if (!this.timer) return
-    clearInterval(this.timer)
-    this.timer = null
-    powerMonitor.removeListener('lock-screen', this.onLockScreen)
+  function computeRecentDistractRatio(): number {
+    const cutoff = Date.now() - RECENT_DISTRACT_WINDOW_MIN * 60 * 1000;
+    // Prune slices older than window
+    while (timeSlices.length > 0 && timeSlices[0].timestamp < cutoff) {
+      timeSlices.shift();
+    }
+    let totalMs = 0;
+    let distractMs = 0;
+    for (const slice of timeSlices) {
+      totalMs += slice.durationMs;
+      if (slice.category === 'entertainment' || slice.category === 'social') {
+        distractMs += slice.durationMs;
+      }
+    }
+    return totalMs > 0 ? distractMs / totalMs : 0;
   }
 
-  recordSnooze(timestamp: number = Date.now()): void {
-    this.snoozeTimestamps.push(timestamp)
-    this.trimWindows(timestamp)
-  }
+  async function poll() {
+    const now = Date.now();
+    const elapsed = now - lastPollTime;
+    lastPollTime = now;
+    tickCount++;
 
-  getSnoozesLast60Min(now: number = Date.now()): number {
-    this.trimWindows(now)
-    return this.snoozeTimestamps.length
-  }
+    // Check system idle time
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    if (idleSeconds >= IDLE_RESET_THRESHOLD) {
+      if (consecutiveIdleSeconds < IDLE_RESET_THRESHOLD) {
+        console.log('[telemetry] Idle for 10+ min, resetting session');
+        resetSession();
+        lastPollTime = Date.now();
+        onTick?.({
+          elapsedMs: 0,
+          appName: 'Unknown',
+          activeCategory: 'unknown',
+          appSwitchesLast5Min: 0,
+          idleSeconds,
+          snoozesLast60Min: countSnoozesLast60Min(),
+          sessionReset: true,
+        });
+        return;
+      }
+    }
+    consecutiveIdleSeconds = idleSeconds;
 
-  getSnoozeTimestamps(): number[] {
-    return [...this.snoozeTimestamps]
-  }
-
-  private onLockScreen = () => {
-    this.resetSession('lock-screen')
-  }
-
-  private resetSession(_reason: string): void {
-    this.sessionSeconds = 0
-    this.productiveSeconds = 0
-    this.distractingSeconds = 0
-    this.neutralSeconds = 0
-    this.appSwitchTimestamps = []
-    this.idleWindow = []
-    this.distractWindow = []
-    this.lastApp = null
-    this.tickCount = 0
-  }
-
-  private trimWindows(now: number): void {
-    const fiveMinAgo = now - 5 * 60 * 1000
-    this.appSwitchTimestamps = this.appSwitchTimestamps.filter(ts => ts >= fiveMinAgo)
-
-    const sixtyMinAgo = now - 60 * 60 * 1000
-    this.snoozeTimestamps = this.snoozeTimestamps.filter(ts => ts >= sixtyMinAgo)
-
-    // idle window: last 300 seconds
-    if (this.idleWindow.length > 300) this.idleWindow = this.idleWindow.slice(-300)
-    // distract window: last 120 seconds
-    if (this.distractWindow.length > 120) this.distractWindow = this.distractWindow.slice(-120)
-  }
-
-  private async tick(): Promise<void> {
-    const now = Date.now()
-    const last = this.lastTickTs ?? now
-    this.lastTickTs = now
-    const elapsedMs = Math.max(0, now - last)
-
-    const idleSeconds = powerMonitor.getSystemIdleTime()
-    const idleNow = idleSeconds >= 5
-    this.idleWindow.push(idleNow ? 1 : 0)
-
-    if (idleSeconds >= 10 * 60) {
-      this.resetSession('idle-reset')
+    // Get active window
+    let appName = 'Unknown';
+    let windowTitle: string | undefined;
+    let windowUrl: string | undefined;
+    let windowBounds: { x: number; y: number; width: number; height: number } | undefined;
+    try {
+      const win = await activeWindow();
+      if (win?.owner?.name) {
+        appName = win.owner.name;
+        windowTitle = win.title;
+        windowUrl = (win as any).url;
+        windowBounds = win.bounds;
+        if (!permissionConfirmedShown) {
+          console.log(`[telemetry] Screen Recording permission OK — detected app: "${appName}"`);
+          permissionConfirmedShown = true;
+        }
+      } else if (!permissionWarningShown) {
+        console.warn(
+          '[telemetry] Could not read active window. Grant Screen Recording permission in System Settings > Privacy & Security.'
+        );
+        permissionWarningShown = true;
+      } else if (permissionWarningShown && tickCount % 30 === 0) {
+        console.warn(`[telemetry] Still cannot read active window (tick ${tickCount}). Check Screen Recording permission.`);
+      }
+    } catch (err) {
+      if (!permissionWarningShown) {
+        console.warn(
+          '[telemetry] activeWindow() failed. Grant Screen Recording permission in System Settings > Privacy & Security.',
+          err
+        );
+        permissionWarningShown = true;
+      } else if (permissionWarningShown && tickCount % 30 === 0) {
+        console.warn(`[telemetry] Still cannot read active window (tick ${tickCount}). Check Screen Recording permission.`);
+      }
     }
 
-    const win = await getActiveWindow()
-    if (!win) return
-
-    const categories = classifyActiveWindow({
-      window: win,
-      rules: this.options.getRules(),
-      workOverrides: this.options.getWorkOverrides()
-    })
-
-    if (this.lastApp && categories.activeApp !== this.lastApp) {
-      this.appSwitchTimestamps.push(now)
+    // Detect app switch
+    if (appName !== lastAppName && lastAppName !== '') {
+      switchTimestamps.push(now);
     }
-    this.lastApp = categories.activeApp
+    lastAppName = appName;
 
-    const bucketName = bucket(categories.activeCategory)
-    this.sessionSeconds += 1
-    if (bucketName === 'productive') this.productiveSeconds += 1
-    else if (bucketName === 'distracting') this.distractingSeconds += 1
-    else this.neutralSeconds += 1
-
-    this.distractWindow.push(bucketName === 'distracting' ? 1 : 0)
-    this.trimWindows(now)
-
-    const recentDistractRatio = this.distractWindow.length > 0
-      ? this.distractWindow.reduce((a, b) => a + b, 0) / this.distractWindow.length
-      : 0
-
-    const snapshotLike: UsageSnapshot = {
-      timestamp: now,
-      focusIntent: null,
-      signals: {
-        sessionMinutes: this.sessionSeconds / 60,
-        distractingMinutes: this.distractingSeconds / 60,
-        productiveMinutes: this.productiveSeconds / 60,
-        appSwitchesLast5Min: this.appSwitchTimestamps.length,
-        idleSecondsLast5Min: this.idleWindow.reduce((a, b) => a + b, 0),
-        timeOfDayLocal: new Date(now).getHours(),
-        snoozesLast60Min: this.snoozeTimestamps.length,
-        recentDistractRatio
-      },
-      categories
+    // Classify and accumulate time
+    const rules = getCategoryRules();
+    const visionEnabled = getVisionEnabled();
+    const baseCategory = classifyApp(appName, rules, windowTitle, windowUrl);
+    const activeDomain = isBrowser(appName) ? extractDomain(windowUrl, windowTitle) : undefined;
+    const activityKey = `${appName}|${activeDomain ?? ''}|${windowTitle ?? ''}`;
+    if (activityKey !== cachedActivityKey) {
+      cachedActivityKey = activityKey;
+      cachedActivity = null;
     }
 
-    this.onTick?.({ timestamp: now, elapsedMs, snapshotLike })
+    let category = cachedActivity?.category ?? baseCategory;
 
-    this.tickCount += 1
-    if (this.tickCount % 5 === 0) {
-      this.onSnapshot?.(snapshotLike)
+    // Non-blocking context check: when distracting, check if relevant to a todo
+    if (category === 'entertainment' || category === 'social') {
+      const apiKey = getGeminiApiKey();
+      const todos = getActiveTodos();
+      const todosWithApps = todos.filter((t) => t.allowedApps && t.allowedApps.length > 0);
+
+      if (apiKey && todosWithApps.length > 0) {
+        const now2 = Date.now();
+        // Throttle: only fire a new Gemini call every 15 seconds
+        if (now2 - lastContextCheckTime >= CONTEXT_CHECK_THROTTLE_MS) {
+          lastContextCheckTime = now2;
+          checkContextRelevance(apiKey, appName, windowTitle, activeDomain, todos)
+            .then((result) => {
+              lastContextResult = result;
+              lastContextResultKey = activityKey;
+            })
+            .catch(() => { /* ignore errors */ });
+        }
+      }
+
+      // Only apply override if the cached result matches the CURRENT activity
+      if (lastContextResult?.isRelevant && lastContextResultKey === activityKey) {
+        category = 'productive';
+      }
+    } else {
+      // Clear context result when user switches to non-distracting app
+      lastContextResult = null;
+      lastContextResultKey = '';
     }
 
+    switch (category) {
+      case 'productive':
+        productiveMs += elapsed;
+        break;
+      case 'entertainment':
+      case 'social':
+        distractingMs += elapsed;
+        break;
+      default:
+        neutralMs += elapsed;
+        break;
+    }
+
+    // Record time slice for rolling window
+    timeSlices.push({ timestamp: now, durationMs: elapsed, category });
+
+    onTick?.({
+      elapsedMs: elapsed,
+      appName,
+      activeCategory: category as UsageSnapshot['categories']['activeCategory'],
+      ...(activeDomain ? { activeDomain } : {}),
+      appSwitchesLast5Min: countSwitchesLast5Min(),
+      idleSeconds,
+      snoozesLast60Min: countSnoozesLast60Min(),
+      sessionReset: false,
+    });
+
+    // Emit snapshot every 5 ticks (5 seconds)
+    if (tickCount % 5 === 0) {
+      const sessionMinutes = parseFloat(((now - sessionStartTime) / 60000).toFixed(2));
+      const distractingMinutes = parseFloat((distractingMs / 60000).toFixed(2));
+      const productiveMinutes = parseFloat((productiveMs / 60000).toFixed(2));
+
+      const hours = new Date().getHours();
+      const minutes = new Date().getMinutes();
+      const timeOfDayLocal = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
+      const recentDistractRatio = computeRecentDistractRatio();
+      const snoozesLast60Min = countSnoozesLast60Min();
+
+      // Refresh activity classification.
+      // Note: this includes fast rule-based detection even when `visionEnabled` is false.
+      cachedActivity = await activityClassifier.classify(
+        {
+          appName,
+          windowTitle,
+          windowUrl,
+          bounds: windowBounds,
+        },
+        rules,
+        visionEnabled
+      );
+
+      const contextOverride = lastContextResult?.isRelevant === true;
+      const contextTodo = contextOverride ? (lastContextResult?.matchedTodoText ?? undefined) : undefined;
+
+      const snapshot: UsageSnapshot = {
+        timestamp: new Date().toISOString(),
+        focusIntent: null,
+        signals: {
+          sessionMinutes,
+          distractingMinutes,
+          productiveMinutes,
+          appSwitchesLast5Min: countSwitchesLast5Min(),
+          idleSecondsLast5Min: idleSeconds,
+          timeOfDayLocal,
+          snoozesLast60Min,
+          recentDistractRatio,
+        },
+        categories: {
+          activeApp: appName,
+          activeCategory: cachedActivity?.category ?? category,
+          ...(activeDomain ? { activeDomain } : {}),
+          ...(cachedActivity?.activityLabel ? { activityLabel: cachedActivity.activityLabel } : {}),
+          ...(cachedActivity?.activityKind ? { activityKind: cachedActivity.activityKind } : {}),
+          ...(cachedActivity?.activityConfidence != null ? { activityConfidence: cachedActivity.activityConfidence } : {}),
+          ...(cachedActivity?.activitySource ? { activitySource: cachedActivity.activitySource } : {}),
+          ...(contextOverride ? { contextOverride: true } : {}),
+          ...(contextTodo ? { contextTodo } : {}),
+        },
+      };
+
+      console.log(
+        `[telemetry] Snapshot #${tickCount}: app="${appName}" category="${snapshot.categories.activeCategory}" domain="${activeDomain ?? 'none'}" activity="${snapshot.categories.activityLabel ?? 'none'}" source="${snapshot.categories.activitySource ?? 'none'}" distracting=${distractingMinutes}min session=${sessionMinutes}min rulesCount=${rules.length}`
+      );
+      onSnapshot(snapshot);
+    }
   }
+
+  // Reset on lock screen
+  const onLockScreen = () => {
+    console.log('[telemetry] Screen locked, resetting session');
+    resetSession();
+    onTick?.({
+      elapsedMs: 0,
+      appName: 'Unknown',
+      activeCategory: 'unknown',
+      appSwitchesLast5Min: 0,
+      idleSeconds: powerMonitor.getSystemIdleTime(),
+      snoozesLast60Min: countSnoozesLast60Min(),
+      sessionReset: true,
+    });
+  };
+
+  return {
+    start() {
+      if (running) return;
+      running = true;
+      resetSession();
+      lastPollTime = Date.now();
+      powerMonitor.on('lock-screen', onLockScreen);
+      pollInterval = setInterval(() => {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        poll()
+          .catch((err) => console.error('[telemetry] Poll error:', err))
+          .finally(() => { pollInFlight = false; });
+      }, 1000);
+      console.log('[telemetry] Started real window telemetry');
+    },
+
+    stop() {
+      if (!running) return;
+      running = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      powerMonitor.removeListener('lock-screen', onLockScreen);
+      console.log('[telemetry] Stopped');
+    },
+
+    isActive() {
+      return running;
+    },
+
+    addSnooze() {
+      snoozeTimestamps.push(Date.now());
+    },
+  };
 }

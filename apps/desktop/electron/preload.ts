@@ -36,6 +36,16 @@ contextBridge.exposeInMainWorld('norot', {
     };
   },
 
+  onLiveScoreUpdate: (callback: (score: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, score: unknown) => {
+      callback(score);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_LIVE_SCORE_UPDATE, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_LIVE_SCORE_UPDATE, handler);
+    };
+  },
+
   // --- Interventions ---
   respondToIntervention: (
     eventId: string,
@@ -72,11 +82,6 @@ contextBridge.exposeInMainWorld('norot', {
     return ipcRenderer.invoke(IPC_CHANNELS.TEST_INTERVENTION);
   },
 
-  // --- History ---
-  getHistory: (limit?: number): Promise<unknown[]> => {
-    return ipcRenderer.invoke(IPC_CHANNELS.GET_HISTORY, limit);
-  },
-
   // --- Settings ---
   getSettings: (): Promise<unknown> => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_SETTINGS);
@@ -108,6 +113,11 @@ contextBridge.exposeInMainWorld('norot', {
 
   getAppStats: (minutes?: number): Promise<unknown[]> => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_APP_STATS, minutes);
+  },
+
+  // --- Wins ---
+  getWins: (): Promise<unknown> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_WINS);
   },
 
   // --- Permissions ---
@@ -166,6 +176,10 @@ contextBridge.exposeInMainWorld('norot', {
   },
 
   // --- Todos ---
+  extractTodos: (transcript: string): Promise<unknown[]> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.EXTRACT_TODOS, transcript);
+  },
+
   getTodos: (): Promise<unknown[]> => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_TODOS);
   },
@@ -182,12 +196,20 @@ contextBridge.exposeInMainWorld('norot', {
     return ipcRenderer.invoke(IPC_CHANNELS.DELETE_TODO, id);
   },
 
+  updateTodo: (id: string, fields: unknown): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.UPDATE_TODO, id, fields);
+  },
+
   reorderTodos: (id: string, newOrder: number): Promise<void> => {
     return ipcRenderer.invoke(IPC_CHANNELS.REORDER_TODOS, id, newOrder);
   },
 
   setTodos: (items: unknown[]): Promise<void> => {
     return ipcRenderer.invoke(IPC_CHANNELS.SET_TODOS, items);
+  },
+
+  appendTodos: (items: unknown[]): Promise<void> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.APPEND_TODOS, items);
   },
 
   onTodosUpdated: (callback: (todos: unknown[]) => void): (() => void) => {
@@ -209,18 +231,65 @@ contextBridge.exposeInMainWorld('norot', {
     return ipcRenderer.invoke(IPC_CHANNELS.CLOSE_TODO_OVERLAY);
   },
 
-  // --- Voice Status ---
-  broadcastVoiceStatus: (isSpeaking: boolean, severity: number, amplitude: number): void => {
-    ipcRenderer.send(IPC_CHANNELS.BROADCAST_VOICE_STATUS, { isSpeaking, severity, amplitude });
+  isTodoOverlayOpen: (): Promise<boolean> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.IS_TODO_OVERLAY_OPEN);
   },
 
-  onVoiceStatus: (callback: (data: { isSpeaking: boolean; severity: number; amplitude: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { isSpeaking: boolean; severity: number; amplitude: number }) => {
+  // --- Voice Status ---
+  broadcastVoiceStatus: (isSpeaking: boolean, severity: number, amplitude: number, lastWordBoundaryAt: number): void => {
+    ipcRenderer.send(IPC_CHANNELS.BROADCAST_VOICE_STATUS, { isSpeaking, severity, amplitude, lastWordBoundaryAt });
+  },
+
+  onVoiceStatus: (callback: (data: { isSpeaking: boolean; severity: number; amplitude: number; lastWordBoundaryAt: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { isSpeaking: boolean; severity: number; amplitude: number; lastWordBoundaryAt: number }) => {
       callback(data);
     };
     ipcRenderer.on(IPC_CHANNELS.ON_VOICE_STATUS, handler);
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.ON_VOICE_STATUS, handler);
     };
+  },
+
+  // --- App Focus ---
+  onAppFocusChanged: (callback: (data: { focused: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { focused: boolean }) => {
+      callback(data);
+    };
+    ipcRenderer.on(IPC_CHANNELS.ON_APP_FOCUS_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_APP_FOCUS_CHANGED, handler);
+    };
+  },
+
+  // --- Voice Agent ---
+  ensureVoiceAgent: (): Promise<{ agentId: string; signedUrl: string }> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.ENSURE_VOICE_AGENT);
+  },
+
+  // --- Check-in Agent ---
+  ensureCheckinAgent: (): Promise<{ agentId: string; signedUrl: string }> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.ENSURE_CHECKIN_AGENT);
+  },
+
+  // --- Voice Chat ---
+  openVoiceChat: (): void => {
+    ipcRenderer.send(IPC_CHANNELS.VOICE_CHAT_OPEN);
+  },
+
+  onVoiceChatOpen: (callback: () => void): (() => void) => {
+    const handler = () => { callback(); };
+    ipcRenderer.on(IPC_CHANNELS.ON_VOICE_CHAT_OPEN, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_VOICE_CHAT_OPEN, handler);
+    };
+  },
+
+  hasElevenLabsKey: (): Promise<boolean> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.HAS_ELEVENLABS_KEY);
+  },
+
+  // --- ElevenLabs TTS (main-process proxy to avoid CORS issues) ---
+  synthesizeElevenLabsTts: (text: string, voiceId: string, tts: unknown): Promise<string> => {
+    return ipcRenderer.invoke(IPC_CHANNELS.ELEVENLABS_TTS, { text, voiceId, tts });
   },
 });

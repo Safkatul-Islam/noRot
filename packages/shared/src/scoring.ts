@@ -20,6 +20,15 @@ function isLateNight(timeStr: string): boolean {
 export function calculateScore(snapshot: UsageSnapshot, snoozePressure: number = 0): { score: number; severity: Severity } {
   const { signals, categories, focusIntent } = snapshot;
 
+  // Prefer client-computed focus score when available.
+  // `focusScore` is 0-100 where higher = more focused; invert to procrastination score.
+  if (typeof signals.focusScore === 'number' && Number.isFinite(signals.focusScore)) {
+    const score = clamp(Math.round((100 - signals.focusScore) + snoozePressure), 0, 100);
+    const band = SEVERITY_BANDS.find(b => score >= b.scoreMin && score <= b.scoreMax);
+    const severity: Severity = band ? band.severity : 0;
+    return { score, severity };
+  }
+
   const distractRatio = signals.recentDistractRatio != null
     ? signals.recentDistractRatio
     : (signals.sessionMinutes > 0

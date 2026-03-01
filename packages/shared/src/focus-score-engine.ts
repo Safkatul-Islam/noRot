@@ -1,71 +1,74 @@
-import type { ActiveCategory } from './types'
+import type { UsageCategories, UsageSignals } from './types';
 
 function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min
-  return Math.max(min, Math.min(max, value))
-}
-
-function isDistractingCategory(category: ActiveCategory): boolean {
-  return category === 'social' || category === 'entertainment'
+  return Math.max(min, Math.min(max, value));
 }
 
 function normalizeSwitchRate(switchesPerMin: number): number {
-  const s = Math.max(0, switchesPerMin)
-  if (s <= 4) return s / 10
-  if (s <= 10) return 0.4 + (s - 4) * (0.4 / 6)
-  return 0.8 + Math.min(s - 10, 5) * (0.2 / 5)
+  // 0-4 = low (0-0.4), 5-10 = medium (0.4-0.8), 11+ = high (0.8-1.0)
+  if (switchesPerMin <= 4) return switchesPerMin / 10;
+  if (switchesPerMin <= 10) return 0.4 + (switchesPerMin - 4) * (0.4 / 6);
+  return 0.8 + Math.min(switchesPerMin - 10, 5) * (0.2 / 5);
 }
 
 export interface FocusScoreTickInput {
-  activeCategory: ActiveCategory
-  appSwitchesLast5Min: number
-  elapsedMs: number
+  activeCategory: UsageCategories['activeCategory'];
+  appSwitchesLast5Min: UsageSignals['appSwitchesLast5Min'];
+  elapsedMs: number;
 }
 
-export interface FocusScoreTickOutput {
-  focusScore: number
-  normSwitchRate: number
-  decayPerSec: number
-  recoveryPerSec: number
+export interface FocusScoreTickResult {
+  focusScore: number; // rounded, 0-100
+  decayPerSec: number; // 3-6
+  recoveryPerSec: number;
 }
 
+/**
+ * Stateful focus meter:
+ * - While distracting: decreases by 3–6 points/sec (dynamic, deterministic).
+ * - While not distracting: recovers toward 100 at a fixed rate.
+ */
 export class FocusScoreEngine {
-  private focusScoreValue: number
-  private readonly recoveryPerSecValue: number
+  private focusScoreRaw: number;
+  private readonly recoveryPerSec: number;
 
-  constructor(options?: { initialFocusScore?: number; recoveryPerSec?: number }) {
-    this.focusScoreValue = clamp(options?.initialFocusScore ?? 100, 0, 100)
-    this.recoveryPerSecValue = clamp(options?.recoveryPerSec ?? 2, 0, 10)
+  constructor(opts?: { initialFocusScore?: number; recoveryPerSec?: number }) {
+    this.focusScoreRaw = clamp(opts?.initialFocusScore ?? 100, 0, 100);
+    this.recoveryPerSec = opts?.recoveryPerSec ?? 2;
   }
 
-  get focusScore(): number {
-    return Math.round(this.focusScoreValue)
+  reset(nextFocusScore: number = 100): void {
+    this.focusScoreRaw = clamp(nextFocusScore, 0, 100);
   }
 
-  reset(score: number = 100): void {
-    this.focusScoreValue = clamp(score, 0, 100)
+  getFocusScore(): number {
+    return Math.round(this.focusScoreRaw);
   }
 
-  tick(input: FocusScoreTickInput): FocusScoreTickOutput {
-    const elapsedSec = Math.max(0, input.elapsedMs) / 1000
-    const switchesPerMin = input.appSwitchesLast5Min / 5
-    const normSwitchRate = clamp(normalizeSwitchRate(switchesPerMin), 0, 1)
+  tick(input: FocusScoreTickInput): FocusScoreTickResult {
+    const elapsedMsSafe = Number.isFinite(input.elapsedMs) ? Math.max(0, input.elapsedMs) : 0;
+    const dt = elapsedMsSafe / 1000;
 
-    const distracting = isDistractingCategory(input.activeCategory)
-    const decayPerSec = distracting ? clamp(3 + 3 * normSwitchRate, 3, 6) : 0
+    const switchesPerMin = (input.appSwitchesLast5Min ?? 0) / 5;
+    const normSwitchRate = normalizeSwitchRate(switchesPerMin);
+    const decayPerSec = clamp(3 + 3 * normSwitchRate, 3, 6);
 
-    if (distracting) {
-      this.focusScoreValue = clamp(this.focusScoreValue - decayPerSec * elapsedSec, 0, 100)
+    const isDistractingNow =
+      input.activeCategory === 'social' || input.activeCategory === 'entertainment';
+
+    if (isDistractingNow) {
+      this.focusScoreRaw -= decayPerSec * dt;
     } else {
-      this.focusScoreValue = clamp(this.focusScoreValue + this.recoveryPerSecValue * elapsedSec, 0, 100)
+      this.focusScoreRaw += this.recoveryPerSec * dt;
     }
+
+    this.focusScoreRaw = clamp(this.focusScoreRaw, 0, 100);
 
     return {
-      focusScore: Math.round(this.focusScoreValue),
-      normSwitchRate,
+      focusScore: Math.round(this.focusScoreRaw),
       decayPerSec,
-      recoveryPerSec: this.recoveryPerSecValue
-    }
+      recoveryPerSec: this.recoveryPerSec,
+    };
   }
 }
 

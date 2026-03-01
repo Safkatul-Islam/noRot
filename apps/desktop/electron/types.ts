@@ -6,6 +6,7 @@ export const IPC_CHANNELS = {
   IS_TELEMETRY_ACTIVE: 'telemetry:active',
   GET_LATEST_SCORE: 'score:latest',
   ON_SCORE_UPDATE: 'score:update',
+  ON_LIVE_SCORE_UPDATE: 'score:live',
   RESPOND_TO_INTERVENTION: 'intervention:respond',
   ON_INTERVENTION: 'intervention:new',
   ON_INTERVENTION_DISMISS: 'intervention:auto-dismiss',
