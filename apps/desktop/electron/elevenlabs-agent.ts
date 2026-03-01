@@ -20,16 +20,21 @@ async function fetchWithNetworkError(
   }
 }
 
-const AGENT_CONFIG_VERSION = 9;
+const AGENT_CONFIG_VERSION = 12;
 
 const COACH_TURN_CONFIG = {
-  turn_timeout: 60,
-  silence_end_call_timeout: 300,
+  // ElevenLabs enforces turn_timeout in [1, 30] seconds.
+  turn_timeout: 30,
+  // Use -1 to disable auto-hangup; renderer explicitly ends sessions.
+  silence_end_call_timeout: -1,
+  mode: 'silence',
 } as const;
 
 const CHECKIN_TURN_CONFIG = {
   turn_timeout: 30,
-  silence_end_call_timeout: 120,
+  // Use -1 to disable auto-hangup; renderer explicitly ends sessions.
+  silence_end_call_timeout: -1,
+  mode: 'silence',
 } as const;
 
 const COACH_LLM_MODEL_ID = 'gpt-4o-mini';
@@ -55,7 +60,13 @@ const UPDATE_TODO_TOOL = {
       start_time: { type: 'string', description: 'Start time. Prefer HH:MM 24h, but you may also use "now" or relative like "in 30 minutes". Omit to keep unchanged.' },
       duration_minutes: { type: 'number', description: 'Duration in minutes. Omit to keep unchanged.' },
       url: { type: 'string', description: 'Relevant URL. Omit to keep unchanged.' },
-      allowed_apps: { type: 'array', items: { type: 'string' }, description: 'Allowed apps/sites during this task. Omit to keep unchanged.' },
+      allowed_apps: {
+        type: 'array',
+        // ElevenLabs validates tool param schemas; string nodes must include a description (or similar metadata).
+        // See: docs/error-patterns/elevenlabs-agent-422-tool-schema.md
+        items: { type: 'string', description: 'An allowed app or website.' },
+        description: 'Allowed apps/sites during this task. Omit to keep unchanged.',
+      },
     },
   },
   expects_response: true,
@@ -117,13 +128,21 @@ const ADD_TODO_TOOL = {
       deadline: { type: 'string', description: 'Deadline time. Prefer HH:MM 24h, but you may also use relative like "in 2 hours". Omit if not discussed.' },
       app: { type: 'string', description: 'Primary app (e.g. "VS Code", "Chrome"). Omit if not discussed.' },
       url: { type: 'string', description: 'Relevant URL. Omit if not discussed.' },
-      allowed_apps: { type: 'array', items: { type: 'string' }, description: 'Allowed apps/sites during this task. Omit if not discussed.' },
+      allowed_apps: {
+        type: 'array',
+        // ElevenLabs validates tool param schemas; string nodes must include a description (or similar metadata).
+        // See: docs/error-patterns/elevenlabs-agent-422-tool-schema.md
+        items: { type: 'string', description: 'An allowed app or website.' },
+        description: 'Allowed apps/sites during this task. Omit if not discussed.',
+      },
     },
   },
   expects_response: true,
 } as const;
 
 const ALL_TOOLS = [SKIP_TURN_TOOL, LIST_TODOS_TOOL, ADD_TODO_TOOL, UPDATE_TODO_TOOL, DELETE_TODO_TOOL, TOGGLE_TODO_TOOL];
+
+export const ELEVENLABS_AGENT_TOOLS = ALL_TOOLS;
 
 const PERSONA_STYLES: Record<Persona, string> = {
   calm_friend: 'warm, supportive, and empathetic',
@@ -216,7 +235,8 @@ async function patchCoachAgentConfig(
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error(`[elevenlabs-agent] Failed to PATCH agent config: ${res.status} — ${text}`);
-    throw new Error(`patch_agent:${res.status}`);
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new Error(`patch_agent:${res.status}:${snippet}`);
   }
   console.log('[elevenlabs-agent] PATCHed agent config for:', agentId);
 }
@@ -439,7 +459,8 @@ async function createCheckinAgent(
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error(`[elevenlabs-agent] Failed to create check-in agent: ${res.status} ${res.statusText} — ${text}`);
-    throw new Error(`create_agent:${res.status}`);
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new Error(`create_agent:${res.status}:${snippet}`);
   }
 
   const data = (await res.json()) as { agent_id?: string };
@@ -492,7 +513,8 @@ async function createAgent(apiKey: string, persona: Persona, explicitToughLove: 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error(`[elevenlabs-agent] Failed to create agent: ${res.status} ${res.statusText} — ${text}`);
-    throw new Error(`create_agent:${res.status}`);
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new Error(`create_agent:${res.status}:${snippet}`);
   }
 
   const data = (await res.json()) as { agent_id?: string };
@@ -519,7 +541,8 @@ async function getSignedUrl(apiKey: string, agentId: string): Promise<string> {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error(`[elevenlabs-agent] Failed to get signed URL: ${res.status} ${res.statusText} — ${text}`);
-    throw new Error(`get_signed_url:${res.status}`);
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    throw new Error(`get_signed_url:${res.status}:${snippet}`);
   }
 
   const data = (await res.json()) as { signed_url?: string };

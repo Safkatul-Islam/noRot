@@ -571,6 +571,13 @@ export function registerIpcHandlers(): void {
         code = 'RATE_LIMIT';
         message = 'Too many requests. Wait a few seconds and try again.';
         canRetry = true;
+      } else if (msg.includes(':422')) {
+        code = 'UNKNOWN';
+        const detail = msg.split(':422:')[1]?.trim();
+        message = detail
+          ? `ElevenLabs rejected the voice agent config (422): ${detail}`
+          : 'ElevenLabs rejected the voice agent config (422). Update noRot and try again.';
+        canRetry = false;
       } else if (msg.includes(':network')) {
         code = 'NETWORK';
         message = 'Couldn\'t reach the voice servers. Check your internet and try again.';
@@ -641,6 +648,13 @@ export function registerIpcHandlers(): void {
         code = 'RATE_LIMIT';
         message = 'Too many requests. Wait a few seconds and try again.';
         canRetry = true;
+      } else if (msg.includes(':422')) {
+        code = 'UNKNOWN';
+        const detail = msg.split(':422:')[1]?.trim();
+        message = detail
+          ? `ElevenLabs rejected the voice agent config (422): ${detail}`
+          : 'ElevenLabs rejected the voice agent config (422). Update noRot and try again.';
+        canRetry = false;
       } else if (msg.includes(':network')) {
         code = 'NETWORK';
         message = 'Couldn\'t reach the voice servers. Check your internet and try again.';
