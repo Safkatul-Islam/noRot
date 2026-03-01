@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trash2, Plus, Check, Link2, ChevronDown, X, Play, Hourglass, Flag } from 'lucide-react';
+import { Trash2, Plus, Check, Link2, ChevronDown, X, Play, Hourglass, Flag, Pencil } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { AppNameCombobox } from '@/components/AppNameCombobox';
 import { getNorotAPI } from '@/lib/norot-api';
@@ -34,6 +34,8 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
   const [editApp, setEditApp] = useState('');
   const [editUrl, setEditUrl] = useState('');
   const [editDeadline, setEditDeadline] = useState('');
+  const [editStartTime, setEditStartTime] = useState('');
+  const [editDurationText, setEditDurationText] = useState('');
   const [newAllowedApp, setNewAllowedApp] = useState('');
 
   const [timeFormat, setTimeFormat] = useState<TimeFormat>('12h');
@@ -114,6 +116,8 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
       setEditApp(todo.app ?? '');
       setEditUrl(todo.url ?? '');
       setEditDeadline(todo.deadline ?? '');
+      setEditStartTime(todo.startTime ?? '');
+      setEditDurationText(typeof todo.durationMinutes === 'number' ? String(todo.durationMinutes) : '');
       setNewAllowedApp('');
     }
   };
@@ -128,6 +132,46 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     handleDeadlineChange(id, `${hh}:${mm}`);
+  };
+
+  const handleStartTimeChange = (id: string, value: string) => {
+    setEditStartTime(value);
+    onUpdate?.(id, { startTime: value || undefined });
+  };
+
+  const setStartTimePreset = (id: string, offsetMinutes: number) => {
+    const d = new Date(Date.now() + offsetMinutes * 60 * 1000);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    handleStartTimeChange(id, `${hh}:${mm}`);
+  };
+
+  const parseDurationText = (text: string): number | undefined => {
+    const trimmed = text.trim();
+    if (!trimmed) return undefined;
+    // "1h 30m" or "1h30m"
+    const hm = trimmed.match(/^(\d+)\s*h\s*(\d+)\s*m?$/i);
+    if (hm) return parseInt(hm[1]) * 60 + parseInt(hm[2]);
+    // "2h"
+    const h = trimmed.match(/^(\d+)\s*h$/i);
+    if (h) return parseInt(h[1]) * 60;
+    // "45m"
+    const m = trimmed.match(/^(\d+)\s*m$/i);
+    if (m) return parseInt(m[1]);
+    // plain number → minutes
+    const n = parseInt(trimmed);
+    if (!isNaN(n) && n > 0) return n;
+    return undefined;
+  };
+
+  const handleDurationBlur = (id: string) => {
+    const minutes = parseDurationText(editDurationText);
+    if (minutes !== undefined) {
+      setEditDurationText(String(minutes));
+      onUpdate?.(id, { durationMinutes: minutes });
+    } else if (!editDurationText.trim()) {
+      onUpdate?.(id, { durationMinutes: undefined });
+    }
   };
 
   const handleAppChange = (id: string, app: string) => {
@@ -215,18 +259,28 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                       )}
                     />
                   ) : (
-                    <span
+                    <div
                       onClick={() => handleStartEdit(todo)}
                       className={cn(
-                        'text-sm leading-relaxed block truncate',
-                        (todo.done || completingIds?.has(todo.id))
-                          ? 'line-through text-text-muted opacity-60'
-                          : 'text-text-primary',
-                        onUpdate && 'cursor-text hover:text-primary transition-colors',
+                        'group/text flex items-baseline gap-1',
+                        onUpdate && 'cursor-text',
                       )}
                     >
-                      {todo.text}
-                    </span>
+                      <span
+                        className={cn(
+                          'text-sm leading-relaxed block truncate',
+                          (todo.done || completingIds?.has(todo.id))
+                            ? 'line-through text-text-muted opacity-60'
+                            : 'text-text-primary',
+                          onUpdate && 'group-hover/text:text-primary transition-colors',
+                        )}
+                      >
+                        {todo.text}
+                      </span>
+                      {onUpdate && !todo.done && !completingIds?.has(todo.id) && (
+                        <Pencil className="size-2.5 shrink-0 text-text-muted opacity-0 group-hover/text:opacity-60 transition-opacity" />
+                      )}
+                    </div>
                   )}
                     {(todo.app || todo.url || todo.deadline || todo.startTime || todo.durationMinutes) && (
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
@@ -274,7 +328,7 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                         'transition-all duration-200',
                         expandedId === todo.id
                           ? 'text-primary bg-primary/10'
-                          : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-secondary hover:bg-white/[0.04]',
+                          : 'text-text-muted opacity-30 group-hover:opacity-100 hover:text-text-secondary hover:bg-white/[0.04]',
                       )}
                     >
                       <ChevronDown
@@ -353,6 +407,110 @@ export function TodoItemList({ todos, onToggle, onDelete, onAdd, onUpdate, showA
                           {editDeadline && (
                             <button
                               onClick={() => handleDeadlineChange(todo.id, '')}
+                              className="text-text-muted hover:text-danger transition-colors"
+                            >
+                              <X className="size-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Start Time */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-text-muted w-14 shrink-0">Start</span>
+                        <div className="flex items-center gap-1 flex-1">
+                          {!editStartTime && (
+                            <>
+                              <button
+                                onClick={() => setStartTimePreset(todo.id, 0)}
+                                className={cn(
+                                  'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                                  'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                                )}
+                              >
+                                Now
+                              </button>
+                              {[30, 60].map((m) => (
+                                <button
+                                  key={m}
+                                  onClick={() => setStartTimePreset(todo.id, m)}
+                                  className={cn(
+                                    'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                                    'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                                  )}
+                                >
+                                  +{m >= 60 ? `${m / 60}h` : `${m}m`}
+                                </button>
+                              ))}
+                            </>
+                          )}
+                          <input
+                            type="time"
+                            value={editStartTime}
+                            onChange={(e) => handleStartTimeChange(todo.id, e.target.value)}
+                            className={cn(
+                              'bg-transparent text-xs text-text-muted',
+                              'border border-white/10 rounded px-2 py-0.5',
+                              'focus:outline-none focus:border-primary/40',
+                              editStartTime ? 'text-text-primary' : '',
+                            )}
+                          />
+                          {editStartTime && (
+                            <button
+                              onClick={() => handleStartTimeChange(todo.id, '')}
+                              className="text-text-muted hover:text-danger transition-colors"
+                            >
+                              <X className="size-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Duration */}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-text-muted w-14 shrink-0">Duration</span>
+                        <div className="flex items-center gap-1 flex-1">
+                          {!editDurationText && (
+                            <>
+                              {[30, 60, 90].map((m) => (
+                                <button
+                                  key={m}
+                                  onClick={() => {
+                                    setEditDurationText(String(m));
+                                    onUpdate?.(todo.id, { durationMinutes: m });
+                                  }}
+                                  className={cn(
+                                    'px-1.5 py-0.5 rounded text-[10px] text-text-muted',
+                                    'border border-white/10 hover:border-primary/40 hover:text-primary transition-colors',
+                                  )}
+                                >
+                                  {formatDurationMinutes(m)}
+                                </button>
+                              ))}
+                            </>
+                          )}
+                          <input
+                            value={editDurationText}
+                            onChange={(e) => setEditDurationText(e.target.value)}
+                            onBlur={() => handleDurationBlur(todo.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleDurationBlur(todo.id);
+                            }}
+                            placeholder="min"
+                            className={cn(
+                              'w-16 bg-transparent text-xs text-text-muted',
+                              'border border-white/10 rounded px-2 py-0.5',
+                              'focus:outline-none focus:border-primary/40',
+                              'placeholder:text-text-muted/50',
+                              editDurationText ? 'text-text-primary' : '',
+                            )}
+                          />
+                          {editDurationText && (
+                            <button
+                              onClick={() => {
+                                setEditDurationText('');
+                                onUpdate?.(todo.id, { durationMinutes: undefined });
+                              }}
                               className="text-text-muted hover:text-danger transition-colors"
                             >
                               <X className="size-3" />
