@@ -1,5 +1,5 @@
 import type { NoRotAPI } from '@/lib/electron-api';
-import type { TodoItem } from '@norot/shared';
+import type { TodoItem, CompletedTodoItem } from '@norot/shared';
 
 /**
  * Mock implementation of the noRot Electron API for browser dev.
@@ -8,6 +8,8 @@ import type { TodoItem } from '@norot/shared';
 
 let mockTodos: TodoItem[] = [];
 let todoListeners: Array<(todos: TodoItem[]) => void> = [];
+let mockCompletedTodos: CompletedTodoItem[] = [];
+let completedTodoListeners: Array<(todos: CompletedTodoItem[]) => void> = [];
 let mockSettings: Record<string, unknown> = {
   persona: 'calm_friend',
   toughLoveExplicitAllowed: false,
@@ -44,6 +46,10 @@ function broadcastSnooze() {
 
 function broadcastTodos() {
   for (const cb of todoListeners) cb([...mockTodos]);
+}
+
+function broadcastCompletedTodos() {
+  for (const cb of completedTodoListeners) cb([...mockCompletedTodos]);
 }
 
 const MOCK_CHAT_RESPONSES = [
@@ -266,6 +272,37 @@ export const mockNorotAPI: NoRotAPI = {
     todoListeners.push(callback);
     return () => {
       todoListeners = todoListeners.filter((cb) => cb !== callback);
+    };
+  },
+
+  // Completed todos — in-memory
+  completeTodo: async (id: string) => {
+    const idx = mockTodos.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const [todo] = mockTodos.splice(idx, 1);
+    const { done: _, ...rest } = todo;
+    mockCompletedTodos.unshift({ ...rest, completedAt: new Date().toISOString() });
+    broadcastTodos();
+    broadcastCompletedTodos();
+  },
+  getCompletedTodos: async () => [...mockCompletedTodos],
+  restoreTodo: async (id: string) => {
+    const idx = mockCompletedTodos.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const [completed] = mockCompletedTodos.splice(idx, 1);
+    const { completedAt: _, ...rest } = completed;
+    mockTodos.push({ ...rest, done: false, order: mockTodos.length });
+    broadcastTodos();
+    broadcastCompletedTodos();
+  },
+  deleteCompletedTodo: async (id: string) => {
+    mockCompletedTodos = mockCompletedTodos.filter((t) => t.id !== id);
+    broadcastCompletedTodos();
+  },
+  onCompletedTodosUpdated: (callback: (todos: CompletedTodoItem[]) => void) => {
+    completedTodoListeners.push(callback);
+    return () => {
+      completedTodoListeners = completedTodoListeners.filter((cb) => cb !== callback);
     };
   },
 

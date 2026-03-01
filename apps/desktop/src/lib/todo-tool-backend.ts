@@ -7,6 +7,7 @@ export interface TodoToolBackend {
   updateTodo(id: string, fields: Partial<Omit<TodoItem, 'id'>>): Promise<void>;
   deleteTodo(id: string): Promise<void>;
   toggleTodo(id: string): Promise<void>;
+  completeTodo(id: string): Promise<void>;
   getSettings(): Promise<{ timeFormat: string; timeZone: string }>;
 }
 
@@ -33,6 +34,10 @@ export class DbTodoBackend implements TodoToolBackend {
 
   async toggleTodo(id: string): Promise<void> {
     await getNorotAPI().toggleTodo(id);
+  }
+
+  async completeTodo(id: string): Promise<void> {
+    await getNorotAPI().completeTodo(id);
   }
 
   async getSettings(): Promise<{ timeFormat: string; timeZone: string }> {
@@ -113,6 +118,17 @@ export class DraftAwareTodoBackend implements TodoToolBackend {
       return;
     }
     await getNorotAPI().toggleTodo(id);
+  }
+
+  async completeTodo(id: string): Promise<void> {
+    const drafts = this.getDrafts();
+    const draftIdx = drafts.findIndex((t) => t.id === id);
+    if (draftIdx !== -1) {
+      // Remove draft — it's "completed"
+      this.setDrafts(drafts.filter((t) => t.id !== id));
+      return;
+    }
+    await getNorotAPI().completeTodo(id);
   }
 
   async getSettings(): Promise<{ timeFormat: string; timeZone: string }> {

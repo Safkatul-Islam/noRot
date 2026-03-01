@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { app } from 'electron';
 import path from 'path';
-import type { ScoreResponse, InterventionEvent, TodoItem, WinsData } from '@norot/shared';
+import type { ScoreResponse, InterventionEvent, TodoItem, CompletedTodoItem, WinsData } from '@norot/shared';
 import { DEFAULT_SETTINGS, DEFAULT_CATEGORY_RULES, type UserSettings, type CategoryRule } from './types';
 import { buildUpdateTodoSql, type TodoUpdateFields } from './todo-update';
 
@@ -57,6 +57,19 @@ export function initDatabase(): void {
       text TEXT NOT NULL,
       done INTEGER NOT NULL DEFAULT 0,
       "order" INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS completed_todos (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      "order" INTEGER NOT NULL DEFAULT 0,
+      app TEXT,
+      url TEXT,
+      allowed_apps TEXT,
+      deadline TEXT,
+      start_time TEXT,
+      duration_minutes INTEGER,
+      completed_at TEXT NOT NULL
     );
   `);
 
@@ -559,6 +572,93 @@ export function setTodos(items: TodoItem[]): void {
     }
   });
   replaceAll(items);
+}
+
+// --- Completed Todos ---
+
+export function completeTodo(id: string): void {
+  const doComplete = db.transaction(() => {
+    const row = db.prepare(
+      'SELECT id, text, "order", app, url, allowed_apps, deadline, start_time, duration_minutes FROM todos WHERE id = ?'
+    ).get(id) as { id: string; text: string; order: number; app: string | null; url: string | null; allowed_apps: string | null; deadline: string | null; start_time: string | null; duration_minutes: number | null } | undefined;
+    if (!row) return;
+
+    db.prepare(
+      'INSERT INTO completed_todos (id, text, "order", app, url, allowed_apps, deadline, start_time, duration_minutes, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      row.id,
+      row.text,
+      row.order,
+      row.app,
+      row.url,
+      row.allowed_apps,
+      row.deadline,
+      row.start_time,
+      row.duration_minutes,
+      new Date().toISOString()
+    );
+
+    db.prepare('DELETE FROM todos WHERE id = ?').run(id);
+  });
+  doComplete();
+}
+
+export function getCompletedTodos(): CompletedTodoItem[] {
+  const rows = db
+    .prepare('SELECT id, text, "order", app, url, allowed_apps, deadline, start_time, duration_minutes, completed_at FROM completed_todos ORDER BY completed_at DESC')
+    .all() as Array<{ id: string; text: string; order: number; app: string | null; url: string | null; allowed_apps: string | null; deadline: string | null; start_time: string | null; duration_minutes: number | null; completed_at: string }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    text: row.text,
+    order: row.order,
+    ...(row.app != null ? { app: row.app } : {}),
+    ...(row.url != null ? { url: row.url } : {}),
+    ...(row.allowed_apps ? { allowedApps: JSON.parse(row.allowed_apps) } : {}),
+    ...(row.deadline != null ? { deadline: row.deadline } : {}),
+    ...(row.start_time != null ? { startTime: row.start_time } : {}),
+    ...(row.duration_minutes != null ? { durationMinutes: row.duration_minutes } : {}),
+    completedAt: row.completed_at,
+  }));
+}
+
+export function restoreTodo(id: string): void {
+  const doRestore = db.transaction(() => {
+    const row = db.prepare(
+      'SELECT id, text, "order", app, url, allowed_apps, deadline, start_time, duration_minutes FROM completed_todos WHERE id = ?'
+    ).get(id) as { id: string; text: string; order: number; app: string | null; url: string | null; allowed_apps: string | null; deadline: string | null; start_time: string | null; duration_minutes: number | null } | undefined;
+    if (!row) return;
+
+    const maxRow = db.prepare('SELECT COALESCE(MAX("order"), -1) AS maxOrder FROM todos').get() as { maxOrder: number };
+    const newOrder = (typeof maxRow?.maxOrder === 'number' ? maxRow.maxOrder : -1) + 1;
+
+    db.prepare(
+      'INSERT INTO todos (id, text, done, "order", app, url, allowed_apps, deadline, start_time, duration_minutes) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      row.id,
+      row.text,
+      newOrder,
+      row.app,
+      row.url,
+      row.allowed_apps,
+      row.deadline,
+      row.start_time,
+      row.duration_minutes
+    );
+
+    db.prepare('DELETE FROM completed_todos WHERE id = ?').run(id);
+  });
+  doRestore();
+}
+
+export function deleteCompletedTodo(id: string): void {
+  db.prepare('DELETE FROM completed_todos WHERE id = ?').run(id);
+}
+
+export function purgeOldCompletedTodos(): number {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare('DELETE FROM completed_todos WHERE completed_at < ?').run(cutoff);
+  return result.changes;
 }
 
 // --- Wins ---

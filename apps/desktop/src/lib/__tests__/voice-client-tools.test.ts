@@ -27,6 +27,9 @@ function createMockBackend(initialTodos: TodoItem[] = []): TodoToolBackend & { t
       const idx = backend.todos.findIndex((t) => t.id === id);
       if (idx !== -1) backend.todos[idx] = { ...backend.todos[idx], done: !backend.todos[idx].done };
     }),
+    completeTodo: vi.fn(async (id: string) => {
+      backend.todos = backend.todos.filter((t) => t.id !== id);
+    }),
     getSettings: vi.fn(async () => ({ timeFormat: '12h', timeZone: 'America/New_York' })),
   };
   return backend;

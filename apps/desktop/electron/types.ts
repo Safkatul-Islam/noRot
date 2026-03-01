@@ -51,6 +51,13 @@ export const IPC_CHANNELS = {
   APPEND_TODOS: 'todos:append',
   ON_TODOS_UPDATED: 'todos:updated',
 
+  // Completed todos
+  COMPLETE_TODO: 'todos:complete',
+  GET_COMPLETED_TODOS: 'todos:completed:get',
+  RESTORE_TODO: 'todos:restore',
+  DELETE_COMPLETED_TODO: 'todos:completed:delete',
+  ON_COMPLETED_TODOS_UPDATED: 'todos:completed:updated',
+
   // Todo overlay window
   OPEN_TODO_OVERLAY: 'todo-overlay:open',
   CLOSE_TODO_OVERLAY: 'todo-overlay:close',

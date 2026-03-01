@@ -1,34 +1,40 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { ChevronDown } from 'lucide-react';
 import { TodoItemList } from '@/components/TodoItemList';
+import { CompletedTodoList } from '@/components/CompletedTodoList';
 import { VoiceOrb } from '@/components/VoiceOrb';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { useTodos } from '@/hooks/useTodos';
 import { getNorotAPI } from '@/lib/norot-api';
 import { cn } from '@/lib/utils';
 import { useVoiceStatusStore } from '@/stores/voice-status-store';
 import { useScoreStore } from '@/stores/score-store';
-import type { TodoItem } from '@norot/shared';
 import type { Severity } from '@norot/shared';
 
 export function TodoOverlayPage() {
-  const [todos, setTodos] = useState<TodoItem[]>([]);
-  const [hasKey, setHasKey] = useState(false);
+  const {
+    todos,
+    completedTodos,
+    completingIds,
+    handleToggle,
+    handleDelete,
+    handleAdd,
+    handleUpdate,
+    handleRestore,
+    handleDeleteCompleted,
+  } = useTodos();
 
-  const loadTodos = useCallback(async () => {
-    try {
-      const items = await getNorotAPI().getTodos();
-      setTodos(items);
-    } catch { /* ignore */ }
-  }, []);
+  const [hasKey, setHasKey] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   useEffect(() => {
     // Make body transparent for Electron transparent window
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
 
-    loadTodos();
     const api = getNorotAPI();
-    const unsubTodos = api.onTodosUpdated((updated) => setTodos(updated));
 
     // Check if ElevenLabs API key is configured
     api.hasElevenLabsKey?.().then(setHasKey).catch(() => {});
@@ -44,38 +50,9 @@ export function TodoOverlayPage() {
     });
 
     return () => {
-      unsubTodos();
       unsubVoice?.();
     };
-  }, [loadTodos]);
-
-  const handleToggle = async (id: string) => {
-    try { await getNorotAPI().toggleTodo(id); } catch { /* ignore */ }
-  };
-
-  const handleDelete = async (id: string) => {
-    try { await getNorotAPI().deleteTodo(id); } catch { /* ignore */ }
-  };
-
-  const handleAdd = async (text: string, app?: string, url?: string) => {
-    try {
-      const newTodo: TodoItem = {
-        id: crypto.randomUUID(),
-        text,
-        done: false,
-        order: todos.length,
-        ...(app ? { app } : {}),
-        ...(url ? { url } : {}),
-      };
-      await getNorotAPI().addTodo(newTodo);
-    } catch { /* ignore */ }
-  };
-
-  const handleUpdate = async (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
-    try {
-      await getNorotAPI().updateTodo(id, fields);
-    } catch { /* ignore */ }
-  };
+  }, []);
 
   const handleOrbClick = () => {
     if (hasKey) {
@@ -109,7 +86,51 @@ export function TodoOverlayPage() {
               onAdd={handleAdd}
               onUpdate={handleUpdate}
               enableAppDropdown={false}
+              completingIds={completingIds}
             />
+
+            {/* Recently Completed section */}
+            {completedTodos.length > 0 && (
+              <div className="mt-4">
+                <button
+                  onClick={() => setShowCompleted(!showCompleted)}
+                  className={cn(
+                    'flex items-center gap-1.5 w-full text-left',
+                    'text-xs text-text-muted hover:text-text-secondary transition-colors',
+                    'mb-2',
+                  )}
+                >
+                  <ChevronDown
+                    className={cn(
+                      'size-3 transition-transform duration-200',
+                      !showCompleted && '-rotate-90',
+                    )}
+                  />
+                  <span>Recently Completed ({completedTodos.length})</span>
+                </button>
+
+                <AnimatePresence>
+                  {showCompleted && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <CompletedTodoList
+                        todos={completedTodos}
+                        onRestore={handleRestore}
+                        onDelete={handleDeleteCompleted}
+                      />
+                      <p className="text-[10px] text-text-muted mt-2 px-1">
+                        Completed tasks are stored for 30 days
+                      </p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
           </div>
         </ScrollArea>
 

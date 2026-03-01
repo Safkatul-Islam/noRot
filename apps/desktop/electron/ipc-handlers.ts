@@ -556,6 +556,43 @@ export function registerIpcHandlers(): void {
     broadcastTodos();
   });
 
+  // --- Completed Todos ---
+
+  function broadcastCompletedTodos(): void {
+    const completed = database.getCompletedTodos();
+    const main = getMainWindow();
+    if (main && !main.isDestroyed()) {
+      main.webContents.send(IPC_CHANNELS.ON_COMPLETED_TODOS_UPDATED, completed);
+    }
+    const todo = getTodoWindow();
+    if (todo && !todo.isDestroyed()) {
+      todo.webContents.send(IPC_CHANNELS.ON_COMPLETED_TODOS_UPDATED, completed);
+    }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.COMPLETE_TODO, (_event, id: string) => {
+    database.completeTodo(id);
+    clearContextCache();
+    broadcastTodos();
+    broadcastCompletedTodos();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.GET_COMPLETED_TODOS, () => {
+    return database.getCompletedTodos();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.RESTORE_TODO, (_event, id: string) => {
+    database.restoreTodo(id);
+    clearContextCache();
+    broadcastTodos();
+    broadcastCompletedTodos();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.DELETE_COMPLETED_TODO, (_event, id: string) => {
+    database.deleteCompletedTodo(id);
+    broadcastCompletedTodos();
+  });
+
   // --- Todo Overlay Window ---
 
   ipcMain.handle(IPC_CHANNELS.OPEN_TODO_OVERLAY, () => {

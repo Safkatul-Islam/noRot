@@ -13,6 +13,7 @@ const mockApi = {
   updateTodo: vi.fn<(id: string, fields: Partial<Omit<TodoItem, 'id'>>) => Promise<void>>(),
   deleteTodo: vi.fn<(id: string) => Promise<void>>(),
   toggleTodo: vi.fn<(id: string) => Promise<void>>(),
+  completeTodo: vi.fn<(id: string) => Promise<void>>(),
   getSettings: vi.fn(),
 };
 
@@ -32,6 +33,7 @@ beforeEach(() => {
   mockApi.updateTodo.mockResolvedValue(undefined);
   mockApi.deleteTodo.mockResolvedValue(undefined);
   mockApi.toggleTodo.mockResolvedValue(undefined);
+  mockApi.completeTodo.mockResolvedValue(undefined);
 });
 
 describe('DbTodoBackend', () => {

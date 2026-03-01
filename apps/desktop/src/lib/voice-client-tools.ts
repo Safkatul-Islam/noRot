@@ -266,8 +266,15 @@ export function createTodoClientTools(backend: TodoToolBackend) {
         const todo = findTodoByText(todos, params.todo_text ?? '');
         if (!todo) return 'Could not find a matching task. Ask the user to clarify which task.';
 
-        await backend.toggleTodo(todo.id);
-        return `${todo.done ? 'Unmarked' : 'Marked'} task as ${todo.done ? 'not done' : 'done'}: "${todo.text}"`;
+        if (todo.done) {
+          // Unchecking — use toggleTodo to flip back
+          await backend.toggleTodo(todo.id);
+          return `Unmarked task as not done: "${todo.text}"`;
+        } else {
+          // Marking done — use completeTodo (immediate, no 3s delay)
+          await backend.completeTodo(todo.id);
+          return `Completed task: "${todo.text}"`;
+        }
       } catch (err) {
         console.error('[voice-tools] toggle_todo error:', err);
         return 'Failed to toggle the task. Please try again.';
