@@ -1,140 +1,90 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect } from 'react';
+import { getNorotAPI } from '@/lib/norot-api';
+import { useScoreStore } from '@/stores/score-store';
+import { useAppStore } from '@/stores/app-store';
+import type { ScoreResponse, Severity } from '@norot/shared';
 
-import type { ScoreResponse, Severity } from '@norot/shared'
-
-import { IPC_CHANNELS } from '../ipc-channels'
-
-export interface LiveScoreUpdate {
-  timestamp: number
-  focusScore: number
-  procrastinationScore: number
-  severity: Severity
-}
-
-export interface ConnectionStatus {
-  connected: boolean
-  lastChecked: number | null
-}
-
-export function useScore(apiUrl: string) {
-  const [score, setScore] = useState<ScoreResponse | null>(null)
-  const [live, setLive] = useState<LiveScoreUpdate | null>(null)
-  const [connection, setConnection] = useState<ConnectionStatus>({ connected: false, lastChecked: null })
+export function useScore() {
+  const setScore = useScoreStore((s) => s.setScore);
+  const setLiveScore = useScoreStore((s) => s.setLiveScore);
+  const addHistoryEntry = useScoreStore((s) => s.addHistoryEntry);
+  const setConnectionStatus = useAppStore((s) => s.setConnectionStatus);
 
   useEffect(() => {
-    let active = true
-    void (async () => {
+    const api = getNorotAPI();
+
+    let cancelled = false;
+
+    const pingApi = async () => {
       try {
-        const latest = await window.norot.invoke<LatestScoreRow | null>(IPC_CHANNELS.scores.getLatest)
-        if (!active || !latest) return
-        setScore({
-          procrastinationScore: latest.score,
-          severity: latest.severity as Severity,
-          reasons: latest.reasons,
-          recommendation: latest.recommendation as ScoreResponse['recommendation']
-        })
+        const settings = await api.getSettings();
+        const baseUrl = settings?.apiUrl || 'http://127.0.0.1:8000';
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        try {
+          const res = await fetch(`${baseUrl}/`, { signal: controller.signal });
+          if (!cancelled) setConnectionStatus(res.ok ? 'connected' : 'disconnected');
+        } finally {
+          clearTimeout(timeout);
+        }
       } catch {
-        // ignore
+        if (!cancelled) setConnectionStatus('disconnected');
       }
-    })()
-    return () => {
-      active = false
-    }
-  }, [])
+    };
 
-  useEffect(() => {
-    const offScore = window.norot.on(IPC_CHANNELS.interventions.onScoreUpdate, (payload) => {
-      const next = parseScoreResponse(payload)
-      if (next) setScore(next)
-    })
-    const offLive = window.norot.on(IPC_CHANNELS.interventions.onLiveScoreUpdate, (payload) => {
-      const next = parseLiveUpdate(payload)
-      if (next) setLive(next)
-    })
-    return () => {
-      offScore()
-      offLive()
-    }
-  }, [])
+    void pingApi();
+    const pingInterval = setInterval(() => {
+      void pingApi();
+    }, 10_000);
 
-  const pingUrl = useMemo(() => {
-    try {
-      return new URL('/', apiUrl).toString()
-    } catch {
-      return null
-    }
-  }, [apiUrl])
+    // Sync telemetry state from main process
+    const setTelemetryActive = useAppStore.getState().setTelemetryActive;
+    api.isTelemetryActive().then((active) => {
+      if (!cancelled) setTelemetryActive(active);
+    }).catch(() => {});
 
-  useEffect(() => {
-    if (!pingUrl) {
-      setConnection({ connected: false, lastChecked: Date.now() })
-      return
-    }
+    // Hydrate latest score (best-effort).
+    api.getLatestScore().then((latest) => {
+      if (!latest || cancelled) return;
+      setScore(
+        latest.procrastinationScore,
+        latest.severity,
+        latest.reasons,
+        latest.recommendation
+      );
+    }).catch(() => {
+      // ignore
+    });
 
-    let timer: number | null = null
-    let canceled = false
-
-    const ping = async () => {
-      try {
-        const res = await fetch(pingUrl)
-        if (canceled) return
-        setConnection({ connected: res.ok, lastChecked: Date.now() })
-      } catch {
-        if (canceled) return
-        setConnection({ connected: false, lastChecked: Date.now() })
+    const unsubscribe = api.onScoreUpdate(
+      (data: ScoreResponse) => {
+        setScore(
+          data.procrastinationScore,
+          data.severity,
+          data.reasons,
+          data.recommendation
+        );
+        addHistoryEntry({
+          timestamp: new Date().toISOString(),
+          score: data.procrastinationScore,
+          severity: data.severity,
+        });
       }
-    }
+    );
 
-    void ping()
-    timer = window.setInterval(() => void ping(), 10_000)
+    const unsubscribeLive =
+      typeof api.onLiveScoreUpdate === 'function'
+        ? api.onLiveScoreUpdate((data: { procrastinationScore: number; severity: Severity }) => {
+            if (cancelled || !data) return;
+            setLiveScore(data.procrastinationScore, data.severity);
+          })
+        : null;
 
     return () => {
-      canceled = true
-      if (timer !== null) window.clearInterval(timer)
-    }
-  }, [pingUrl])
-
-  return { score, live, connection }
-}
-
-interface LatestScoreRow {
-  timestamp: number
-  score: number
-  severity: number
-  reasons: string[]
-  recommendation: unknown
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function parseScoreResponse(payload: unknown): ScoreResponse | null {
-  if (!isRecord(payload)) return null
-  const procrastinationScore = payload.procrastinationScore
-  const severity = payload.severity
-  const reasons = payload.reasons
-  const recommendation = payload.recommendation
-
-  if (typeof procrastinationScore !== 'number' || !Number.isFinite(procrastinationScore)) return null
-  if (severity !== 0 && severity !== 1 && severity !== 2 && severity !== 3 && severity !== 4) return null
-  if (!Array.isArray(reasons) || !reasons.every(r => typeof r === 'string')) return null
-  if (!isRecord(recommendation)) return null
-
-  return payload as unknown as ScoreResponse
-}
-
-function parseLiveUpdate(payload: unknown): LiveScoreUpdate | null {
-  if (!isRecord(payload)) return null
-  const timestamp = payload.timestamp
-  const focusScore = payload.focusScore
-  const procrastinationScore = payload.procrastinationScore
-  const severity = payload.severity
-
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return null
-  if (typeof focusScore !== 'number' || !Number.isFinite(focusScore)) return null
-  if (typeof procrastinationScore !== 'number' || !Number.isFinite(procrastinationScore)) return null
-  if (severity !== 0 && severity !== 1 && severity !== 2 && severity !== 3 && severity !== 4) return null
-
-  return { timestamp, focusScore, procrastinationScore, severity }
+      cancelled = true;
+      clearInterval(pingInterval);
+      if (typeof unsubscribe === 'function') unsubscribe();
+      if (typeof unsubscribeLive === 'function') unsubscribeLive();
+    };
+  }, [setScore, setLiveScore, addHistoryEntry, setConnectionStatus]);
 }

@@ -1,4 +1,4 @@
-import type { ScoreResponse, InterventionEvent, TodoItem, WinsData, TTSSettings } from '@norot/shared';
+import type { ScoreResponse, InterventionEvent, TodoItem, WinsData, TTSSettings, Severity } from '@norot/shared';
 
 export interface CategoryRule {
   id: string;
@@ -52,6 +52,7 @@ export interface NoRotAPI {
   isTelemetryActive(): Promise<boolean>;
   getLatestScore(): Promise<ScoreResponse | null>;
   onScoreUpdate(callback: (score: ScoreResponse) => void): () => void;
+  onLiveScoreUpdate(callback: (score: { procrastinationScore: number; severity: Severity }) => void): () => void;
   respondToIntervention(
     eventId: string,
     response: 'snoozed' | 'dismissed' | 'working'
