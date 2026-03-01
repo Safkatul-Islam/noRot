@@ -35,6 +35,7 @@ export interface TelemetryTick {
   activitySource?: 'rules' | 'vision';
   visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
   visionMessage?: string;
+  visionNextScanInSec?: number | null;
   appSwitchesLast5Min: number;
   idleSeconds: number;
   snoozesLast60Min: number;
@@ -416,6 +417,7 @@ export function createTelemetryCollector(
       ...(cachedActivity?.activitySource ? { activitySource: cachedActivity.activitySource } : {}),
       visionStatus,
       visionMessage,
+      visionNextScanInSec: nextScanInSec,
       appSwitchesLast5Min: countSwitchesLast5Min(),
       idleSeconds,
       snoozesLast60Min: countSnoozesLast60Min(),

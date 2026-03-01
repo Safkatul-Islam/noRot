@@ -16,6 +16,7 @@ interface AppState {
     activitySource?: 'rules' | 'vision';
     visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
     visionMessage?: string;
+    visionNextScanInSec?: number | null;
     updatedAt: number;
   };
   setActivePage: (page: Page) => void;
@@ -30,6 +31,7 @@ interface AppState {
     activitySource?: 'rules' | 'vision';
     visionStatus?: 'disabled' | 'idle' | 'classifying' | 'classified';
     visionMessage?: string;
+    visionNextScanInSec?: number | null;
   }) => void;
 }
 
