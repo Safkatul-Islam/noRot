@@ -1,33 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion, useSpring } from 'motion/react';
-import { Mic, MicOff, PhoneOff, RotateCcw, Save, Settings, Volume2, VolumeX, X } from 'lucide-react';
-import { PERSONAS } from '@norot/shared';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
+import { RotateCcw, Save, Settings, X } from 'lucide-react';
+import type { TodoItem } from '@norot/shared';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Slider } from '@/components/ui/slider';
 import { VoiceOrb } from '@/components/VoiceOrb';
+import { VoiceControls } from '@/components/VoiceControls';
+import { VoiceTaskPanel } from '@/components/VoiceTaskPanel';
+import { FloatingTaskBubble } from '@/components/FloatingTaskBubble';
+import type { FloatingBubble } from '@/components/FloatingTaskBubble';
 import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import { useTranscriptTodoExtraction } from '@/hooks/useTranscriptTodoExtraction';
-import { PANEL_SPRING } from '@/components/ProposedTasksPanel';
-import { useVoiceChatStore, selectHasProposedTodos, selectShowProposedPanel } from '@/stores/voice-chat-store';
-import { useSettingsStore } from '@/stores/settings-store';
+import { useVoiceChatStore, selectHasProposedTodos } from '@/stores/voice-chat-store';
 import { useAppStore } from '@/stores/app-store';
 import { getNorotAPI } from '@/lib/norot-api';
 import { cn } from '@/lib/utils';
-import { PERSONA_ICON_MAP } from '@/lib/persona-icons';
+
+interface TodoItemWithEdited extends TodoItem {
+  _userEdited?: boolean;
+}
 
 export function VoiceChatDialog() {
-  const { isOpen, close, clearProposedTodos } = useVoiceChatStore();
+  const { isOpen, mode, close, clearProposedTodos } = useVoiceChatStore();
   const storeHasProposed = useVoiceChatStore(selectHasProposedTodos);
-  const showProposed = useVoiceChatStore(selectShowProposedPanel);
-  const persona = useSettingsStore((s) => s.persona);
+  const proposedTodos = useVoiceChatStore((s) => s.proposedTodos) as TodoItemWithEdited[];
+  const isExtracting = useVoiceChatStore((s) => s.isExtracting);
+  const missingGeminiKey = useVoiceChatStore((s) => s.missingGeminiKey);
+
   const {
     startConversation,
     stopConversation,
@@ -40,40 +39,93 @@ export function VoiceChatDialog() {
     volume,
     setVolume,
     sendUserActivity,
-  } = useVoiceAgent();
+  } = useVoiceAgent({ mode });
 
-  // Extraction runs inside the dialog (needs transcript + status).
-  // The ProposedTasksPanel is rendered separately in App.tsx (outside motion wrappers).
-  useTranscriptTodoExtraction(transcript, status, {
-    getProposedTodos: () => useVoiceChatStore.getState().proposedTodos,
-    setProposedTodos: (todos) => useVoiceChatStore.getState().setProposedTodos(todos),
-    setIsExtracting: (v) => useVoiceChatStore.getState().setIsExtracting(v),
-    setMissingGeminiKey: (v) => useVoiceChatStore.getState().setMissingGeminiKey(v),
-  });
-
-  const scrollRef = useRef<HTMLDivElement>(null);
   const hasStartedRef = useRef(false);
   const startConversationRef = useRef(startConversation);
   startConversationRef.current = startConversation;
   const sendUserActivityRef = useRef(sendUserActivity);
   sendUserActivityRef.current = sendUserActivity;
   const lastTranscriptAtRef = useRef<number>(Date.now());
+
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [floatingBubbles, setFloatingBubbles] = useState<FloatingBubble[]>([]);
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const transcriptScrollRef = useRef<HTMLDivElement>(null);
+
+  const isConnected = status === 'connected';
+  const isConnecting = status === 'connecting';
+
+  const settleBubble = useCallback((id: string) => {
+    setFloatingBubbles((prev) => prev.filter((b) => b.id !== id));
+  }, []);
+
+  const floatingIds = useMemo(() => new Set(floatingBubbles.map((b) => b.id)), [floatingBubbles]);
+
+  const extractionCallbacks = useMemo(() => ({
+    getProposedTodos: () => useVoiceChatStore.getState().proposedTodos,
+    setProposedTodos: (todos: TodoItem[]) => {
+      const prev = useVoiceChatStore.getState().proposedTodos as TodoItemWithEdited[];
+      const prevIds = new Set(prev.map((t) => t.id));
+
+      useVoiceChatStore.getState().setProposedTodos(todos);
+
+      if (mode !== 'coach') return;
+      if (isReviewing) return;
+
+      const newExtracted = (todos as TodoItemWithEdited[])
+        .filter((t) => !prevIds.has(t.id) && !t._userEdited);
+      if (newExtracted.length === 0) return;
+
+      const now = Date.now();
+      const bubbles: FloatingBubble[] = newExtracted.map((t, i) => ({
+        id: t.id,
+        text: t.text,
+        spawnedAt: now,
+        delayMs: i * 200,
+      }));
+      setFloatingBubbles((prevB) => [...prevB, ...bubbles]);
+    },
+    setIsExtracting: (v: boolean) => useVoiceChatStore.getState().setIsExtracting(v),
+    setMissingGeminiKey: (v: boolean) => useVoiceChatStore.getState().setMissingGeminiKey(v),
+  }), [mode, isReviewing]);
+
+  const { setProposedTodos: updateProposedTodos } = useTranscriptTodoExtraction(
+    transcript,
+    status,
+    extractionCallbacks,
+    { enabled: mode === 'coach' },
+  );
 
   // Auto-start conversation when dialog opens
   useEffect(() => {
     if (isOpen && !hasStartedRef.current) {
       hasStartedRef.current = true;
+      setIsReviewing(false);
+      setFloatingBubbles([]);
+      setSaveError(null);
       startConversationRef.current();
     }
     if (!isOpen) {
       hasStartedRef.current = false;
       setConfirmingClose(false);
+      setIsReviewing(false);
+      setFloatingBubbles([]);
+      setIsSaving(false);
+      setSaveError(null);
     }
   }, [isOpen]);
 
-  const isConnected = status === 'connected';
-  const isConnecting = status === 'connecting';
+  // Auto-scroll transcript
+  useEffect(() => {
+    const el = transcriptScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [transcript]);
 
   // Track transcript activity so we can avoid infinite keepalive pings.
   useEffect(() => {
@@ -84,19 +136,25 @@ export function VoiceChatDialog() {
   // periodically signaling user activity during silence.
   useEffect(() => {
     if (!isConnected) return;
-    // Kick once on connect so we beat the default timeout window.
+    const IDLE_AFTER_MS = 25_000;
+    const MAX_IDLE_MS = 4 * 60_000;
+    // Kick once shortly after connect to establish "activity".
     lastTranscriptAtRef.current = Date.now();
-    sendUserActivityRef.current();
+    const kick = setTimeout(() => {
+      sendUserActivityRef.current();
+    }, 1500);
 
-    const KEEPALIVE_WINDOW_MS = 60_000;
     const interval = setInterval(() => {
       // Only needed while waiting for the user (i.e., not while the agent talks)
       const sinceLastMsg = Date.now() - lastTranscriptAtRef.current;
-      if (sinceLastMsg <= KEEPALIVE_WINDOW_MS && !isSpeaking) {
+      if (!isSpeaking && sinceLastMsg >= IDLE_AFTER_MS && sinceLastMsg <= MAX_IDLE_MS) {
         sendUserActivityRef.current();
       }
-    }, 5_000);
-    return () => clearInterval(interval);
+    }, 20_000);
+    return () => {
+      clearTimeout(kick);
+      clearInterval(interval);
+    };
   }, [isConnected, isSpeaking]);
 
   // Auto-dismiss confirmation if connection drops and no proposed todos
@@ -105,6 +163,12 @@ export function VoiceChatDialog() {
       setConfirmingClose(false);
     }
   }, [isConnected, storeHasProposed, confirmingClose]);
+
+  const doClose = () => {
+    stopConversation();
+    // Don't clear proposed todos — keep drafts unless user explicitly saves.
+    close();
+  };
 
   // Close with confirmation guard
   const requestClose = () => {
@@ -115,269 +179,292 @@ export function VoiceChatDialog() {
     }
   };
 
-  const doClose = () => {
-    stopConversation();
-    // Don't clear proposed todos — the standalone panel persists after close
-    close();
+  const handleVoiceDone = async () => {
+    if (isConnecting) return;
+    if (mode === 'checkin') {
+      await stopConversation();
+      close();
+      return;
+    }
+
+    setFloatingBubbles([]);
+    setIsReviewing(true);
+    await stopConversation();
+  };
+
+  const handleKeepTalking = () => {
+    setSaveError(null);
+    setIsReviewing(false);
+    startConversationRef.current();
   };
 
   const handleSaveAndClose = async () => {
-    const { proposedTodos } = useVoiceChatStore.getState();
+    const { proposedTodos: currentTodos } = useVoiceChatStore.getState();
+    if (isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
     try {
-      if (proposedTodos.length > 0) {
-        await getNorotAPI().appendTodos(proposedTodos);
+      if (currentTodos.length > 0) {
+        await getNorotAPI().appendTodos(currentTodos);
         clearProposedTodos();
       }
     } catch (err) {
       console.error('[voice-chat] Failed to save tasks:', err);
+      setSaveError('Failed to save tasks. Your drafts are still here.');
+      setIsSaving(false);
+      return;
     }
-    stopConversation();
+    setIsSaving(false);
+    await stopConversation();
     close();
   };
 
-  // Auto-scroll transcript — target the Radix ScrollArea viewport, not the inner div
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    // The actual scrollable element is the ScrollArea viewport (parent of our div)
-    const viewport = el.closest('[data-slot="scroll-area-viewport"]') ?? el.parentElement;
-    if (viewport) {
-      viewport.scrollTop = viewport.scrollHeight;
-    }
-  }, [transcript]);
+  const taskTitle = isReviewing ? 'Your Tasks' : 'Draft Tasks';
+  const showEmptyTalking = !isReviewing;
 
-  const statusText = isConnecting
-    ? 'Connecting...'
-    : isConnected
-      ? (isSpeaking ? 'noRot is speaking...' : 'Listening...')
-      : 'Ready to connect';
+  const statusText = isReviewing
+    ? (mode === 'coach' ? 'Review your tasks and save them.' : 'All set.')
+    : isConnecting
+      ? 'Connecting...'
+      : isSpeaking
+        ? (mode === 'checkin' ? 'noRot is speaking...' : 'Coach is speaking...')
+        : (mode === 'checkin' ? 'Tell me what you\'re stuck on.' : 'Tell me what you need to get done.');
 
-  const PersonaIcon = PERSONA_ICON_MAP[persona];
-  const personaLabel = PERSONAS[persona].label;
-  const keepTalkingRef = useRef<HTMLButtonElement>(null);
+  const assistantLabel = mode === 'checkin' ? 'noRot' : 'Coach';
 
-  // Shift dialog left when proposed panel is visible
-  const dialogContentRef = useRef<HTMLDivElement>(null);
-  const shiftX = useSpring(0, PANEL_SPRING);
+  // Escape key handler (Dialog used to handle this automatically)
   useEffect(() => {
-    shiftX.set(showProposed ? -170 : 0);
-  }, [showProposed, shiftX]);
-  useEffect(() => {
-    return shiftX.on('change', (v) => {
-      if (dialogContentRef.current) {
-        dialogContentRef.current.style.transform = `translateX(${v}px)`;
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (confirmingClose) {
+          setConfirmingClose(false);
+        } else {
+          requestClose();
+        }
       }
-    });
-  }, [shiftX]);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, confirmingClose]);
 
-  return (
-    <Dialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) requestClose();
-      }}
-    >
-      <AnimatePresence>
-        {isOpen && (
-            <DialogContent
-              ref={dialogContentRef}
-              showCloseButton={false}
-              className="w-[calc(100vw-4rem)] max-w-6xl h-[calc(100vh-4rem)] flex flex-col p-0 gap-0 overflow-hidden"
-              onEscapeKeyDown={(e) => {
-                // Escape goes through confirmation when connected or has proposed todos
-                if (isConnected || storeHasProposed) {
-                  e.preventDefault();
-                  setConfirmingClose(true);
-              }
-            }}
-          >
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="flex flex-col h-full"
-            >
-              {/* -- Header -- */}
-              <DialogHeader className="shrink-0 px-6 pt-5 pb-4 border-b border-white/[0.06]">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex size-8 items-center justify-center rounded-full bg-primary/10 border border-primary/20">
-                      <PersonaIcon className="size-4 text-primary" />
-                    </div>
-                    <div>
-                      <DialogTitle className="text-base">noRot Coach</DialogTitle>
-                      <DialogDescription className="text-xs text-text-secondary mt-0.5">
-                        {personaLabel} — plan tasks, break down work, get unstuck
-                      </DialogDescription>
-                    </div>
-                  </div>
-                  <button
-                    onClick={requestClose}
-                    className="inline-flex size-8 items-center justify-center rounded-md border border-transparent text-text-secondary opacity-80 transition-all hover:border-primary/35 hover:bg-primary/12 hover:text-primary hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                    aria-label="Close"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-              </DialogHeader>
+  // Body scroll lock (Dialog used to handle this automatically)
+  useEffect(() => {
+    if (!isOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [isOpen]);
 
-              {/* -- Orb Band -- */}
-              <div className="shrink-0 flex flex-col items-center py-4 gap-2">
-                <div style={{ width: 120, height: 120 }}>
-                  <VoiceOrb interactive={false} paused={!isConnected} />
-                </div>
-                <span className="text-xs text-text-secondary">{statusText}</span>
-              </div>
+  return createPortal(
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="voice-overlay"
+          className="fixed inset-0 z-50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          {/* Blur backdrop — click to close */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={requestClose}
+          />
 
-              {/* -- Transcript -- */}
-              <div className="flex-1 min-h-0 px-6 pb-4">
-                <ScrollArea className="h-full rounded-lg border border-white/6 bg-black/20 p-3">
-                  <div ref={scrollRef} className="space-y-3">
-                    {transcript.length === 0 ? (
-                      <div className="flex items-center justify-center h-full min-h-[120px]">
-                        <p className="text-sm text-text-secondary/50 italic text-center">
-                          {isConnecting
-                            ? 'Connecting to your coach...'
-                            : isConnected
-                              ? 'Say something to get started. Try "What should I work on first?"'
-                              : 'Conversation will appear here...'}
-                        </p>
+          {/* Centered content — no box, no border, no glass bg */}
+          <div className="relative z-10 flex h-full items-center justify-center px-6 pointer-events-none">
+            <div className="w-full max-w-4xl pointer-events-auto relative">
+              {/* Close button */}
+              <button
+                onClick={requestClose}
+                className="absolute -top-2 -right-2 z-20 inline-flex size-9 items-center justify-center rounded-md border border-transparent text-text-secondary opacity-80 transition-all hover:border-primary/35 hover:bg-primary/12 hover:text-primary hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                aria-label="Close"
+              >
+                <X className="size-4" />
+              </button>
+
+              <LayoutGroup>
+                <div className="flex flex-col md:flex-row gap-8 w-full md:items-center items-center">
+                  {/* Left column: voice experience */}
+                  <div className="flex-1 flex flex-col items-center gap-4 relative min-w-0">
+                    {/* Orb + floating bubbles */}
+                    <motion.div
+                      initial={{ scale: 0, opacity: 0, filter: 'blur(12px)' }}
+                      animate={{ scale: 1, opacity: 1, filter: 'blur(0px)' }}
+                      transition={{ type: 'spring', duration: 0.8, bounce: 0.3, delay: 0.05 }}
+                    >
+                      <motion.div
+                        className="relative mx-auto"
+                        animate={{
+                          width: isReviewing ? 80 : 160,
+                          height: isReviewing ? 80 : 160,
+                        }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                      >
+                        <VoiceOrb
+                          detail={10}
+                          interactive={false}
+                          paused={status !== 'connected'}
+                        />
+                        <AnimatePresence>
+                          {!isReviewing && floatingBubbles.map((bubble, i) => (
+                            <FloatingTaskBubble
+                              key={bubble.id}
+                              bubble={bubble}
+                              index={i}
+                              onSettle={settleBubble}
+                            />
+                          ))}
+                        </AnimatePresence>
+                      </motion.div>
+                    </motion.div>
+
+                    {/* Status indicator */}
+                    <p className="text-text-secondary text-sm text-center">
+                      {statusText}
+                    </p>
+
+                    {/* Error state / transcript */}
+                    {error ? (
+                      <div className="text-center space-y-3">
+                        <p className="text-sm text-red-400">{error.message}</p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {error.canRetry && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => startConversationRef.current()}
+                              className="gap-1"
+                            >
+                              <RotateCcw className="size-3" />
+                              Try Again
+                            </Button>
+                          )}
+                          {error.code === 'NO_API_KEY' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                doClose();
+                                useAppStore.getState().setActivePage('settings');
+                              }}
+                              className="gap-1"
+                            >
+                              <Settings className="size-3" />
+                              Open Settings
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ) : (
-                      transcript.map((msg, i) => {
-                        const prevRole = i > 0 ? transcript[i - 1].role : null;
-                        const showLabel = msg.role !== prevRole;
-                        return (
-                          <div key={i}>
-                            {showLabel && (
-                              <p
-                                className={cn(
-                                  'text-[10px] font-medium uppercase tracking-wider mb-1',
-                                  msg.role === 'user'
-                                    ? 'text-right text-text-secondary/60'
-                                    : 'text-text-secondary/60'
-                                )}
-                              >
-                                {msg.role === 'user' ? 'You' : 'noRot'}
-                              </p>
-                            )}
+                      <AnimatePresence>
+                        {!isReviewing && transcript.length > 0 && (
+                          <motion.div
+                            key="transcript"
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.35 }}
+                            className="w-full max-w-lg"
+                          >
                             <div
-                              className={cn(
-                                'text-sm rounded-xl px-3 py-2 max-w-[85%] leading-relaxed',
-                                msg.role === 'user'
-                                  ? 'ml-auto bg-primary/15 text-text-primary'
-                                  : 'bg-white/5 text-text-secondary border border-white/[0.04]'
-                              )}
+                              ref={transcriptScrollRef}
+                              className="w-full max-h-40 overflow-y-auto space-y-2 px-4"
                             >
-                              {msg.content}
+                              {transcript.map((msg, i) => (
+                                <p
+                                  key={i}
+                                  className={cn(
+                                    'text-sm',
+                                    msg.role === 'user' ? 'text-text-secondary' : 'text-primary',
+                                  )}
+                                >
+                                  <span className="font-medium">
+                                    {msg.role === 'user' ? 'You' : assistantLabel}:
+                                  </span>{' '}
+                                  {msg.content}
+                                </p>
+                              ))}
                             </div>
-                          </div>
-                        );
-                      })
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     )}
 
-                    {/* Typing indicator when AI is speaking */}
-                    {isConnected && isSpeaking && (
-                      <div className="flex items-center gap-1 pt-1">
-                        {[0, 1, 2].map((i) => (
-                          <span
-                            key={i}
-                            className="size-1.5 rounded-full bg-text-secondary/40"
-                            style={{
-                              animation: 'typing-bounce 1s ease-in-out infinite',
-                              animationDelay: `${i * 0.15}s`,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </ScrollArea>
-              </div>
+                    {/* Controls */}
+                    <VoiceControls
+                      micMuted={micMuted}
+                      onToggleMic={() => setMicMuted(!micMuted)}
+                      volume={volume}
+                      onVolumeChange={setVolume}
+                      disabled={isConnecting}
+                    />
 
-              {/* -- Error state -- */}
-              {error && (
-                <div className="shrink-0 mx-6 mt-3 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm">
-                  <p className="text-danger">{error.message}</p>
-                  <div className="flex gap-2 mt-2">
-                    {error.canRetry && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="border-danger/30 text-danger hover:bg-danger/10"
-                        onClick={() => {
-                          hasStartedRef.current = false;
-                          startConversation();
-                          hasStartedRef.current = true;
-                        }}
-                      >
-                        <RotateCcw className="size-3 mr-1" />
-                        Retry
-                      </Button>
-                    )}
-                    {error.code === 'NO_API_KEY' && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          doClose();
-                          useAppStore.getState().setActivePage('settings');
-                        }}
-                      >
-                        <Settings className="size-3 mr-1" />
-                        Open Settings
-                      </Button>
+                    {/* Primary actions */}
+                    <div className="flex flex-wrap gap-2 justify-center pt-2">
+                      {!isReviewing ? (
+                        <Button
+                          size="lg"
+                          onClick={handleVoiceDone}
+                          disabled={isConnecting}
+                        >
+                          I'm done
+                        </Button>
+                      ) : mode === 'coach' && proposedTodos.length > 0 ? (
+                        <>
+                          <Button
+                            size="lg"
+                            onClick={handleSaveAndClose}
+                            disabled={isSaving}
+                          >
+                            <Save className="size-4 mr-2" />
+                            {isSaving
+                              ? 'Saving...'
+                              : `Save ${proposedTodos.length} task${proposedTodos.length !== 1 ? 's' : ''}`}
+                          </Button>
+                          <Button
+                            size="lg"
+                            variant="outline"
+                            onClick={handleKeepTalking}
+                            disabled={isSaving}
+                          >
+                            Keep talking
+                          </Button>
+                        </>
+                      ) : (
+                        <Button size="lg" variant="outline" onClick={requestClose}>
+                          Close
+                        </Button>
+                      )}
+                    </div>
+
+                    {saveError && (
+                      <p className="text-xs text-danger text-center">{saveError}</p>
                     )}
                   </div>
-                </div>
-              )}
 
-              {/* -- Controls Bar -- */}
-              <div className="shrink-0 flex items-center gap-3 px-6 py-4 border-t border-white/[0.06]">
-                {/* Mic mute toggle */}
-                <Button
-                  size="icon"
-                  variant="outline"
-                  aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
-                  className={cn(
-                    'size-9',
-                    micMuted && 'border-danger/30 text-danger hover:bg-danger/10'
+                  {/* Right column: tasks (coach mode only) */}
+                  {mode === 'coach' && (
+                    <VoiceTaskPanel
+                      title={taskTitle}
+                      isExtracting={isExtracting}
+                      missingGeminiKey={missingGeminiKey}
+                      todos={proposedTodos}
+                      floatingIds={floatingIds}
+                      onUpdateTodos={updateProposedTodos}
+                      itemLayoutIdPrefix="task-bubble-"
+                      emptyText={showEmptyTalking ? 'Tasks will appear as you talk...' : undefined}
+                      showOptionalTimeHint={!isReviewing}
+                      timeHintText="Add times as you go, or set them here."
+                    />
                   )}
-                  onClick={() => setMicMuted(!micMuted)}
-                >
-                  {micMuted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
-                </Button>
-
-                {/* Volume control */}
-                <div className="flex items-center gap-2 min-w-[140px]">
-                  {volume === 0 ? (
-                    <VolumeX className="size-4 shrink-0 text-text-secondary" />
-                  ) : (
-                    <Volume2 className="size-4 shrink-0 text-text-secondary" />
-                  )}
-                  <Slider
-                    value={[Math.round(volume * 100)]}
-                    min={0}
-                    max={100}
-                    aria-label="AI voice volume"
-                    onValueChange={([val]) => setVolume(val / 100)}
-                    className="w-24"
-                  />
                 </div>
+              </LayoutGroup>
 
-                {/* End Conversation -- pushed right */}
-                <Button
-                  variant="outline"
-                  className="ml-auto border-danger/30 text-danger hover:bg-danger/10"
-                  onClick={requestClose}
-                >
-                  <PhoneOff className="size-4 mr-1" />
-                  End Conversation
-                </Button>
-              </div>
-
-              {/* -- Close Confirmation Overlay -- */}
+              {/* Close Confirmation Overlay — full screen, above everything */}
               {confirmingClose && (
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -387,53 +474,57 @@ export function VoiceChatDialog() {
                   aria-modal="true"
                   aria-labelledby="confirm-close-title"
                   aria-describedby="confirm-close-desc"
-                  className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-xl bg-black/60 backdrop-blur-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.stopPropagation();
-                      setConfirmingClose(false);
-                    }
-                  }}
+                  className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-sm"
                 >
-                  <p id="confirm-close-title" className="text-lg font-semibold text-text-primary">End conversation?</p>
+                  <p id="confirm-close-title" className="text-lg font-semibold text-text-primary">
+                    {mode === 'checkin' ? 'End check-in?' : 'End conversation?'}
+                  </p>
                   <p id="confirm-close-desc" className="text-sm text-text-secondary">
                     {storeHasProposed
-                      ? 'You have unsaved proposed tasks.'
-                      : 'Your conversation will not be saved.'}
+                      ? 'You have unsaved draft tasks.'
+                      : (mode === 'checkin' ? 'You can always open another check-in later.' : 'Your conversation will not be saved.')}
                   </p>
                   <div className="flex gap-3 mt-2">
                     <Button
-                      ref={keepTalkingRef}
-                      autoFocus
                       variant="outline"
-                      onClick={() => setConfirmingClose(false)}
+                      onClick={() => {
+                        setSaveError(null);
+                        setConfirmingClose(false);
+                      }}
+                      disabled={isSaving}
                     >
-                      Keep talking
+                      Stay
                     </Button>
                     {storeHasProposed && (
                       <Button
                         variant="outline"
                         className="border-primary/30 text-primary hover:bg-primary/10"
                         onClick={handleSaveAndClose}
+                        disabled={isSaving}
                       >
                         <Save className="size-3 mr-1" />
-                        Save tasks & close
+                        {isSaving ? 'Saving...' : 'Save & close'}
                       </Button>
                     )}
                     <Button
                       variant="outline"
                       className="border-danger/30 text-danger hover:bg-danger/10"
                       onClick={doClose}
+                      disabled={isSaving}
                     >
                       {storeHasProposed ? 'Close & keep drafts' : 'End chat'}
                     </Button>
                   </div>
+                  {saveError && (
+                    <p className="text-xs text-danger mt-2">{saveError}</p>
+                  )}
                 </motion.div>
               )}
-            </motion.div>
-          </DialogContent>
-        )}
-      </AnimatePresence>
-    </Dialog>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
   );
 }

@@ -22,14 +22,14 @@ import { useVoice } from '@/hooks/useVoice';
 import { useSettings } from '@/hooks/useSettings';
 import { useStartupFlow } from '@/hooks/useStartupFlow';
 import { useAppStore } from '@/stores/app-store';
-import { useVoiceChatStore, selectShowProposedPanel } from '@/stores/voice-chat-store';
-import { ProposedTasksPanel } from '@/components/ProposedTasksPanel';
+import { useVoiceChatStore } from '@/stores/voice-chat-store';
 import { getNorotAPI } from '@/lib/norot-api';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
+      gcTime: 5 * 60 * 1000, // 5 minutes - explicit for long-running Electron app
       retry: 1,
     },
   },
@@ -53,7 +53,7 @@ function AppContent() {
   // Listen for voice chat open requests from overlay orb
   useEffect(() => {
     const unsub = getNorotAPI().onVoiceChatOpen?.(() => {
-      useVoiceChatStore.getState().open();
+      useVoiceChatStore.getState().openCoach();
     });
     return () => { unsub?.(); };
   }, []);
@@ -131,8 +131,6 @@ const isTodoOverlay =
 function App() {
   const { completeOnboarding, completeDailySetup, continueSession } = useSettings();
   const { screen, goToDailySetup, goToDashboard } = useStartupFlow();
-  const showProposed = useVoiceChatStore(selectShowProposedPanel);
-  const voiceChatOpen = useVoiceChatStore((s) => s.isOpen);
 
   // Close todo overlay when navigating away from dashboard
   useEffect(() => {
@@ -266,8 +264,6 @@ function App() {
               </motion.div>
             )}
           </AnimatePresence>
-          {/* Proposed tasks panel — rendered outside motion wrappers to escape stacking context */}
-          <ProposedTasksPanel open={voiceChatOpen && showProposed && screen === 'dashboard'} />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

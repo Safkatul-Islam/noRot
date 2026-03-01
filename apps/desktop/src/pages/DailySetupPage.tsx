@@ -1,18 +1,21 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence, LayoutGroup } from 'motion/react';
 import { Mic, List, RotateCcw, ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GlassCard } from '@/components/GlassCard';
 import { TodoItemList } from '@/components/TodoItemList';
-import { TodoPreviewList } from '@/components/TodoPreviewList';
-import { PersonaSelector } from '@/components/PersonaSelector';
+
 import { VoiceOrb } from '@/components/VoiceOrb';
+import { VoiceControls } from '@/components/VoiceControls';
+import { DailySetupTaskPanel } from '@/components/DailySetupTaskPanel';
+import { FloatingTaskBubble } from '@/components/FloatingTaskBubble';
 import { slideVariants, slideTransition } from '@/lib/animation-variants';
-import { getNorotAPI } from '@/lib/norot-api';
+import { getNorotAPI, isElectron } from '@/lib/norot-api';
 import { useDailySetupStore } from '@/stores/daily-setup-store';
+import { useTranscriptTodoExtraction } from '@/hooks/useTranscriptTodoExtraction';
 import { useVoiceAgent } from '@/hooks/useVoiceAgent';
 import { cn } from '@/lib/utils';
-import type { TodoItem, Persona } from '@norot/shared';
+import type { TodoItem } from '@norot/shared';
 
 interface DailySetupPageProps {
   onComplete: () => void;
@@ -26,26 +29,38 @@ function getTimeOfDayGreeting(): string {
   return 'Good evening';
 }
 
-const STEPS = ['greeting', 'chat', 'preview', 'confirm'] as const;
+const STEPS = ['greeting', 'chat', 'preview'] as const;
+
+interface TodoItemWithEdited extends TodoItem {
+  _userEdited?: boolean;
+}
 
 export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
   const {
-    step, inputMode, previewTodos,
-    setStep, setInputMode, setPreviewTodos,
+    step,
+    inputMode,
+    previewTodos,
+    isReviewing,
+    isExtracting,
+    missingGeminiKey,
+    floatingBubbles,
+    setStep,
+    setInputMode,
+    setPreviewTodos,
+    setIsReviewing,
+    setIsExtracting,
+    setMissingGeminiKey,
+    addFloatingBubbles,
+    removeFloatingBubble,
+    clearFloatingBubbles,
     reset,
   } = useDailySetupStore();
 
   const [direction, setDirection] = useState(1);
   const [hasGemini, setHasGemini] = useState<boolean | null>(null);
   const [hasElevenLabs, setHasElevenLabs] = useState(false);
-  const [persona, setPersona] = useState<Persona>('calm_friend');
-  const [showPersonaPicker, setShowPersonaPicker] = useState(false);
-
   // Manual todo state
   const [manualTodos, setManualTodos] = useState<TodoItem[]>([]);
-
-  // Extracting state
-  const [isExtracting, setIsExtracting] = useState(false);
 
   // Voice agent hook
   const voiceAgent = useVoiceAgent();
@@ -58,7 +73,6 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
         setHasGemini(geminiKey.length > 0);
         const elKey = typeof settings.elevenLabsApiKey === 'string' ? settings.elevenLabsApiKey.trim() : '';
         setHasElevenLabs(elKey.length > 0);
-        setPersona(settings.persona);
       })
       .catch(() => {
         setHasGemini(false);
@@ -85,6 +99,46 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
     }
   }, [step, inputMode]);
 
+  const extractionCallbacks = useMemo(() => ({
+    getProposedTodos: () => useDailySetupStore.getState().previewTodos,
+    setProposedTodos: (todos: TodoItem[]) => {
+      useDailySetupStore.setState((prev) => {
+        const prevIds = new Set((prev.previewTodos as TodoItemWithEdited[]).map((t) => t.id));
+        const newExtracted = (todos as TodoItemWithEdited[]).filter((t) => !prevIds.has(t.id) && !t._userEdited);
+        if (prev.isReviewing || newExtracted.length === 0) {
+          return { previewTodos: todos };
+        }
+
+        const now = Date.now();
+        const bubbles = newExtracted.map((t, i) => ({
+          id: t.id,
+          text: t.text,
+          spawnedAt: now,
+          delayMs: i * 200,
+        }));
+
+        return {
+          previewTodos: todos,
+          floatingBubbles: [...prev.floatingBubbles, ...bubbles],
+        };
+      });
+    },
+    setIsExtracting: (v: boolean) => useDailySetupStore.getState().setIsExtracting(v),
+    setMissingGeminiKey: (v: boolean) => useDailySetupStore.getState().setMissingGeminiKey(v),
+  }), []);
+
+  const { setProposedTodos: setExtractedTodos } = useTranscriptTodoExtraction(
+    voiceAgent.transcript,
+    voiceAgent.status,
+    extractionCallbacks,
+  );
+
+  const settleBubble = useCallback((id: string) => {
+    removeFloatingBubble(id);
+  }, [removeFloatingBubble]);
+
+  const floatingIds = useMemo(() => new Set(floatingBubbles.map((b) => b.id)), [floatingBubbles]);
+
   const goTo = (target: typeof STEPS[number]) => {
     const currentIdx = STEPS.indexOf(step);
     const targetIdx = STEPS.indexOf(target);
@@ -94,45 +148,37 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
 
   const handleSelectMode = (mode: 'voice' | 'manual') => {
     setInputMode(mode);
+    setIsReviewing(false);
+    setIsExtracting(false);
+    setMissingGeminiKey(false);
+    clearFloatingBubbles();
+    setPreviewTodos([]);
+    setManualTodos([]);
     goTo('chat');
   };
 
   const handleVoiceDone = async () => {
+    clearFloatingBubbles();
+    setIsReviewing(true);
     await voiceAgent.stopConversation();
-
-    // Build transcript string from voice agent transcript
-    const transcript = voiceAgent.transcript
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n');
-
-    if (!transcript.trim()) {
-      // No transcript — go straight to manual
-      goTo('preview');
-      return;
-    }
-
-    setIsExtracting(true);
-    try {
-      const todos = await getNorotAPI().extractTodos(transcript);
-      setPreviewTodos(todos);
-    } catch (err) {
-      console.error('[DailySetup] extract todos from voice error:', err);
-    }
-    setIsExtracting(false);
-    goTo('preview');
   };
 
-  const handleManualContinue = () => {
-    setPreviewTodos(manualTodos);
-    goTo('preview');
+  const handleStartDay = async () => {
+    await handleFinish();
   };
 
-  const handleManualTodoAdd = (text: string) => {
+  const handleManualContinue = async () => {
+    await handleFinish(manualTodos);
+  };
+
+  const handleManualTodoAdd = (text: string, app?: string, url?: string) => {
     const todo: TodoItem = {
       id: crypto.randomUUID(),
       text,
       done: false,
       order: manualTodos.length,
+      ...(app ? { app } : {}),
+      ...(url ? { url } : {}),
     };
     setManualTodos((prev) => [...prev, todo]);
   };
@@ -145,15 +191,21 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
     setManualTodos((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handlePreviewUpdate = (todos: TodoItem[]) => {
-    setPreviewTodos(todos);
+  const handleManualTodoUpdate = (id: string, fields: Partial<Omit<TodoItem, 'id'>>) => {
+    setManualTodos((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
   };
 
-  const handleFinish = async () => {
+  const handleFinish = async (todosOverride?: TodoItem[]) => {
+    const todosToSaveRaw = (todosOverride ?? previewTodos) as TodoItemWithEdited[];
+    const todosToSave = todosToSaveRaw.map((t, i) => {
+      // Strip internal edit marker before persisting
+      const { _userEdited: _ignored, ...rest } = t;
+      return { ...rest, order: i } satisfies TodoItem;
+    });
     try {
       const api = getNorotAPI();
-      if (previewTodos.length > 0) {
-        await api.setTodos(previewTodos);
+      if (todosToSave.length > 0) {
+        await api.setTodos(todosToSave);
       }
     } catch {
       // Continue even on error
@@ -161,17 +213,14 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
     onComplete();
   };
 
-  const handlePersonaChange = async (p: Persona) => {
-    setPersona(p);
-    setShowPersonaPicker(false);
-    try {
-      await getNorotAPI().updateSettings({ persona: p });
-    } catch { /* ignore */ }
-  };
-
   if (hasGemini === null) return null;
 
-  const stepIndex = STEPS.indexOf(step);
+  const canVoice = isElectron() && hasElevenLabs;
+
+  const stepsForDots = step === 'chat' && inputMode === 'voice'
+    ? (['greeting', 'chat'] as const)
+    : STEPS;
+  const stepIndex = Math.max(0, (stepsForDots as readonly string[]).indexOf(step));
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -183,7 +232,7 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
       <div className="flex flex-col flex-1 items-center justify-center px-6">
       {/* Step dots */}
       <div className="flex gap-2 mb-8">
-        {STEPS.map((_, i) => (
+        {stepsForDots.map((_, i) => (
           <div
             key={i}
             className={cn(
@@ -199,7 +248,12 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
       </div>
 
       {/* Step content */}
-      <div className="w-full max-w-lg">
+      <div
+        className={cn(
+          'w-full',
+          step === 'chat' && inputMode === 'voice' ? 'max-w-4xl' : 'max-w-lg',
+        )}
+      >
         <AnimatePresence mode="wait" custom={direction}>
           {/* Step 1: Greeting + Mode Selection */}
           {step === 'greeting' && (
@@ -220,27 +274,9 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                   What's on your plate today?
                 </p>
 
-                {/* Current persona */}
-                {showPersonaPicker ? (
-                  <div className="w-full">
-                    <PersonaSelector
-                      selectedPersona={persona}
-                      onSelect={handlePersonaChange}
-                      compact
-                    />
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setShowPersonaPicker(true)}
-                    className="text-xs text-text-muted hover:text-primary transition-colors"
-                  >
-                    Coach: <span className="text-text-secondary">{persona.replace('_', ' ')}</span> &middot; change
-                  </button>
-                )}
-
                 {/* Mode selection buttons */}
                 <div className="flex flex-col gap-2 w-full mt-2">
-                  {hasElevenLabs && hasGemini && (
+                  {canVoice && (
                     <Button
                       size="lg"
                       onClick={() => handleSelectMode('voice')}
@@ -259,9 +295,19 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                     <List className="size-4" />
                     Add Manually
                   </Button>
-                  {!hasGemini && !hasElevenLabs && (
+                  {!isElectron() && (
                     <p className="text-xs text-text-muted">
-                      Add API keys in Settings to unlock AI features.
+                      Voice mode is only available in the desktop app.
+                    </p>
+                  )}
+                  {isElectron() && !hasElevenLabs && (
+                    <p className="text-xs text-text-muted">
+                      Add an ElevenLabs API key in Settings to unlock voice mode.
+                    </p>
+                  )}
+                  {isElectron() && hasElevenLabs && !hasGemini && (
+                    <p className="text-xs text-text-muted">
+                      Voice mode is enabled. Add a Gemini API key in Settings to auto-extract tasks from your conversation.
                     </p>
                   )}
                 </div>
@@ -301,6 +347,7 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                     onToggle={handleManualTodoToggle}
                     onDelete={handleManualTodoDelete}
                     onAdd={handleManualTodoAdd}
+                    onUpdate={handleManualTodoUpdate}
                   />
                   <div className="flex justify-center">
                     <Button
@@ -308,168 +355,169 @@ export function DailySetupPage({ onComplete, onSkip }: DailySetupPageProps) {
                       onClick={handleManualContinue}
                       disabled={manualTodos.length === 0}
                     >
-                      Continue
+                      Start my day
                     </Button>
                   </div>
                 </GlassCard>
               ) : (
-                <div className="flex flex-col gap-4 items-center">
-                  {/* Inline VoiceOrb with spring reveal */}
-                  <motion.div
-                    initial={{ scale: 0, opacity: 0, filter: 'blur(12px)' }}
-                    animate={{ scale: 1, opacity: 1, filter: 'blur(0px)' }}
-                    transition={{ type: 'spring', duration: 0.8, bounce: 0.3, delay: 0.2 }}
-                    className="w-40 h-40 mx-auto mb-4"
-                  >
-                    <VoiceOrb detail={10} interactive={false} />
-                  </motion.div>
-
-                  {/* Voice error state */}
-                  {voiceAgent.error ? (
-                    <div className="text-center space-y-3">
-                      <p className="text-sm text-red-400">{voiceAgent.error.message}</p>
-                      <div className="flex gap-2 justify-center">
-                        {voiceAgent.error.canRetry ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => voiceAgent.startConversation()}
-                            className="gap-1"
-                          >
-                            <RotateCcw className="size-3" />
-                            Try Again
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              voiceAgent.stopConversation();
-                              goTo('greeting');
-                            }}
-                            className="gap-1"
-                          >
-                            <ChevronLeft className="size-3" />
-                            Go Back
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            voiceAgent.stopConversation();
-                            handleSelectMode('manual');
+                <LayoutGroup>
+                  <div className="flex flex-col md:flex-row gap-8 w-full md:items-center items-center">
+                    {/* Left column: voice experience */}
+                    <div className="flex-1 flex flex-col items-center gap-4 relative min-w-0">
+                      {/* Orb + floating bubbles */}
+                      <motion.div
+                        initial={{ scale: 0, opacity: 0, filter: 'blur(12px)' }}
+                        animate={{ scale: 1, opacity: 1, filter: 'blur(0px)' }}
+                        transition={{ type: 'spring', duration: 0.8, bounce: 0.3, delay: 0.1 }}
+                      >
+                        <motion.div
+                          className="relative mx-auto"
+                          animate={{
+                            width: isReviewing ? 80 : 160,
+                            height: isReviewing ? 80 : 160,
                           }}
+                          transition={{ type: 'spring', stiffness: 300, damping: 25 }}
                         >
-                          Switch to Manual
+                          <VoiceOrb
+                            detail={10}
+                            interactive={false}
+                            paused={voiceAgent.status !== 'connected'}
+                          />
+                          <AnimatePresence>
+                            {!isReviewing && floatingBubbles.map((bubble, i) => (
+                              <FloatingTaskBubble
+                                key={bubble.id}
+                                bubble={bubble}
+                                index={i}
+                                onSettle={settleBubble}
+                              />
+                            ))}
+                          </AnimatePresence>
+                        </motion.div>
+                      </motion.div>
+
+                      {/* Status indicator */}
+                      <p className="text-text-secondary text-sm text-center">
+                        {isReviewing
+                          ? 'Review your tasks and start your day.'
+                          : voiceAgent.status === 'connecting'
+                            ? 'Connecting...'
+                            : voiceAgent.isSpeaking
+                              ? 'Coach is speaking...'
+                              : 'Tell me about your day.'}
+                      </p>
+
+                      {/* Voice error state */}
+                      {voiceAgent.error ? (
+                        <div className="text-center space-y-3">
+                          <p className="text-sm text-red-400">{voiceAgent.error.message}</p>
+                          <div className="flex flex-wrap gap-2 justify-center">
+                            {voiceAgent.error.canRetry ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => voiceAgent.startConversation()}
+                                className="gap-1"
+                              >
+                                <RotateCcw className="size-3" />
+                                Try Again
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  voiceAgent.stopConversation();
+                                  reset();
+                                }}
+                                className="gap-1"
+                              >
+                                <ChevronLeft className="size-3" />
+                                Go Back
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                voiceAgent.stopConversation();
+                                handleSelectMode('manual');
+                              }}
+                            >
+                              Switch to Manual
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <AnimatePresence>
+                          {!isReviewing && voiceAgent.transcript.length > 0 && (
+                            <motion.div
+                              key="transcript"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.35 }}
+                              className="w-full max-w-lg"
+                            >
+                              <div className="w-full max-h-40 overflow-y-auto space-y-2 px-4">
+                                {voiceAgent.transcript.map((msg, i) => (
+                                  <p
+                                    key={i}
+                                    className={cn(
+                                      'text-sm',
+                                      msg.role === 'user' ? 'text-text-secondary' : 'text-primary',
+                                    )}
+                                  >
+                                    <span className="font-medium">
+                                      {msg.role === 'user' ? 'You' : 'Coach'}:
+                                    </span>{' '}
+                                    {msg.content}
+                                  </p>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      )}
+
+                      {/* Controls */}
+                      <VoiceControls
+                        micMuted={voiceAgent.micMuted}
+                        onToggleMic={() => voiceAgent.setMicMuted(!voiceAgent.micMuted)}
+                        volume={voiceAgent.volume}
+                        onVolumeChange={voiceAgent.setVolume}
+                        disabled={voiceAgent.status === 'connecting'}
+                      />
+
+                      {/* Primary action */}
+                      <div className="flex justify-center pt-2">
+                        <Button
+                          size="lg"
+                          onClick={isReviewing ? handleStartDay : handleVoiceDone}
+                          disabled={
+                            (!isReviewing && voiceAgent.status === 'connecting')
+                            || (isReviewing && (isExtracting || previewTodos.length === 0))
+                          }
+                        >
+                          {isReviewing
+                            ? (isExtracting ? 'Finishing...' : 'Start my day')
+                            : "I'm done"}
                         </Button>
                       </div>
                     </div>
-                  ) : (
-                    <>
-                      {/* Status indicator */}
-                      <p className="text-text-secondary text-sm text-center">
-                        {voiceAgent.status === 'connecting'
-                          ? 'Connecting...'
-                          : voiceAgent.isSpeaking
-                            ? 'Coach is speaking...'
-                            : 'Tell me about your day.'}
-                      </p>
 
-                      {/* Real-time transcript */}
-                      {voiceAgent.transcript.length > 0 && (
-                        <div className="w-full max-h-48 overflow-y-auto space-y-2 px-4">
-                          {voiceAgent.transcript.map((msg, i) => (
-                            <p
-                              key={i}
-                              className={cn(
-                                'text-sm',
-                                msg.role === 'user' ? 'text-text-secondary' : 'text-primary',
-                              )}
-                            >
-                              <span className="font-medium">
-                                {msg.role === 'user' ? 'You' : 'Coach'}:
-                              </span>{' '}
-                              {msg.content}
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* Done button */}
-                  <div className="flex justify-center">
-                    <Button
-                      size="lg"
-                      onClick={handleVoiceDone}
-                      disabled={voiceAgent.status === 'connecting' || isExtracting}
-                    >
-                      {isExtracting ? 'Generating...' : "I'm done"}
-                    </Button>
+                    {/* Right column: task panel (always visible) */}
+                    <DailySetupTaskPanel
+                      isReviewing={isReviewing}
+                      isExtracting={isExtracting}
+                      missingGeminiKey={missingGeminiKey}
+                      todos={previewTodos}
+                      floatingIds={floatingIds}
+                      onUpdateTodos={setExtractedTodos}
+                    />
                   </div>
-                </div>
+                </LayoutGroup>
               )}
-            </motion.div>
-          )}
-
-          {/* Step 3: Task Preview */}
-          {step === 'preview' && (
-            <motion.div
-              key="preview"
-              custom={direction}
-              variants={slideVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={slideTransition}
-            >
-              <GlassCard className="px-8">
-                <h2 className="text-2xl font-bold text-text-primary tracking-tight text-center">
-                  Review Your Tasks
-                </h2>
-                <p className="text-text-secondary text-sm text-center">
-                  Edit, add, or remove tasks. Click a task to rename it.
-                </p>
-                <TodoPreviewList
-                  todos={previewTodos}
-                  onUpdate={handlePreviewUpdate}
-                />
-                <div className="flex justify-center">
-                  <Button
-                    size="lg"
-                    onClick={() => goTo('confirm')}
-                    disabled={previewTodos.length === 0}
-                  >
-                    Looks good!
-                  </Button>
-                </div>
-              </GlassCard>
-            </motion.div>
-          )}
-
-          {/* Step 4: Confirm */}
-          {step === 'confirm' && (
-            <motion.div
-              key="confirm"
-              custom={direction}
-              variants={slideVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={slideTransition}
-            >
-              <GlassCard className="items-center text-center px-8">
-                <h2 className="text-2xl font-bold text-text-primary tracking-tight">
-                  You're all set!
-                </h2>
-                <p className="text-text-secondary text-sm leading-relaxed max-w-sm">
-                  Let's get to work! noRot will keep you on track.
-                </p>
-                <Button size="lg" onClick={handleFinish} className="mt-2">
-                  Start my day
-                </Button>
-              </GlassCard>
             </motion.div>
           )}
         </AnimatePresence>

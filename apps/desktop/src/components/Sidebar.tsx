@@ -34,7 +34,7 @@ export function Sidebar({ onToggleTodo }: SidebarProps) {
 
   const handleOrbClick = () => {
     if (hasElevenLabsKey) {
-      useVoiceChatStore.getState().open();
+      useVoiceChatStore.getState().openCoach();
     } else {
       toast('Add your ElevenLabs API key in Settings to chat with noRot');
     }

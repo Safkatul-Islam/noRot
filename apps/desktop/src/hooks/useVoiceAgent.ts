@@ -7,13 +7,16 @@ import type { VoiceAgentError } from '@/lib/voice-errors';
 import { parseVoiceError } from '@/lib/voice-errors';
 import type { ChatMessage } from '@norot/shared';
 
-export function useVoiceAgent() {
+export function useVoiceAgent(opts?: { mode?: 'coach' | 'checkin' }) {
+  const mode = opts?.mode ?? 'coach';
   const [transcript, setTranscript] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<VoiceAgentError | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const isConnecting = useRef(false);
   const mountedRef = useRef(true);
+  const userInitiatedStopRef = useRef(false);
+  const prevStatusRef = useRef<string>('idle');
 
   // Track mount state so retry timeout doesn't update unmounted component
   useEffect(() => {
@@ -32,14 +35,14 @@ export function useVoiceAgent() {
       }]);
     },
     onError: (err) => {
-      console.error('[voice-agent]', err);
+      console.error(`[voice-agent:${mode}]`, err);
       setError({
         code: 'NETWORK',
         message: 'Voice connection lost. Please try again.',
         canRetry: true,
       });
     },
-    clientTools: createTodoClientTools('voice-agent'),
+    clientTools: createTodoClientTools(mode === 'checkin' ? 'checkin-agent' : 'voice-agent'),
   });
 
   useEffect(() => {
@@ -52,6 +55,8 @@ export function useVoiceAgent() {
     isConnecting.current = true;
 
     setError(null);
+    setTranscript([]);
+    userInitiatedStopRef.current = false;
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
@@ -65,7 +70,10 @@ export function useVoiceAgent() {
     }
     try {
       const connect = async () => {
-        const { signedUrl } = await getNorotAPI().ensureVoiceAgent();
+        const api = getNorotAPI();
+        const { signedUrl } = mode === 'checkin'
+          ? await api.ensureCheckinAgent()
+          : await api.ensureVoiceAgent();
         await conversation.startSession({ signedUrl });
       };
 
@@ -94,6 +102,7 @@ export function useVoiceAgent() {
 
   const stopConversation = async () => {
     isConnecting.current = false;
+    userInitiatedStopRef.current = true;
     try {
       await conversation.endSession();
     } catch {
@@ -102,10 +111,29 @@ export function useVoiceAgent() {
     useVoiceStatusStore.getState().setIsSpeaking(false);
   };
 
+  // Show a helpful retry UI when the session drops unexpectedly.
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const next = conversation.status;
+    prevStatusRef.current = next;
+
+    if (!mountedRef.current) return;
+    if (userInitiatedStopRef.current) return;
+
+    if (prev === 'connected' && next === 'disconnected') {
+      setError({
+        code: 'NETWORK',
+        message: 'Voice session ended unexpectedly. Click Retry to reconnect.',
+        canRetry: true,
+      });
+    }
+  }, [conversation.status]);
+
   // Lets the UI signal "I'm here" during silence so the agent doesn't
   // re-engage with default timeout prompts.
   const sendUserActivity = () => {
     try {
+      if (conversation.status !== 'connected') return;
       // @elevenlabs/react provides this; optional-chain for safety.
       conversation.sendUserActivity?.();
     } catch {

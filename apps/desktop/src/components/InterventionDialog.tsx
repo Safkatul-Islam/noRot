@@ -13,10 +13,11 @@ import { SeverityBadge } from '@/components/SeverityBadge';
 import { ShineBorder } from '@/components/effects/ShineBorder';
 import { Meteors } from '@/components/effects/Meteors';
 import { ShimmerButton } from '@/components/effects/ShimmerButton';
-import { CheckinVoicePanel } from '@/components/CheckinVoicePanel';
 import type { InterventionEvent } from '@norot/shared';
 import { SEVERITY_BANDS, stripEmotionTags } from '@norot/shared';
 import { getNorotAPI } from '@/lib/norot-api';
+import { useVoiceChatStore } from '@/stores/voice-chat-store';
+import { toast } from 'sonner';
 import { Clock, X, Briefcase, HelpCircle } from 'lucide-react';
 
 interface InterventionDialogProps {
@@ -36,37 +37,16 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
   const severityColor = intervention ? SEVERITY_BANDS[intervention.severity]?.color ?? '#8b5cf6' : '#8b5cf6';
   const useShine = intervention !== null && intervention.severity >= 2;
   const isHighSeverity = intervention !== null && intervention.severity >= 3;
-
-  const [showCheckin, setShowCheckin] = useState(false);
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState(false);
 
   // Check for ElevenLabs key when dialog opens
   useEffect(() => {
     if (open) {
-      setShowCheckin(false);
       getNorotAPI().getSettings().then((s) => {
         setHasElevenLabsKey(Boolean(s.elevenLabsApiKey));
       }).catch(() => {});
     }
   }, [open]);
-
-  const checkinContent = showCheckin ? (
-    <div className="mt-4 space-y-3">
-      {hasElevenLabsKey && (
-        <CheckinVoicePanel
-          onEnd={() => {
-            setShowCheckin(false);
-            if (intervention) {
-              onRespond(intervention.id, 'working');
-            }
-          }}
-        />
-      )}
-      <div className="p-3 rounded-md bg-surface-secondary text-text-secondary text-sm">
-        What's blocking you? Try breaking your task into smaller steps.
-      </div>
-    </div>
-  ) : null;
 
   const highSeverityFooter = intervention ? (
     <DialogFooter className="mt-4">
@@ -90,7 +70,16 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
         <Button
           variant="outline"
           className="border-primary text-primary hover:bg-primary/10"
-          onClick={() => setShowCheckin(true)}
+          onClick={() => {
+            if (!intervention) return;
+            if (!hasElevenLabsKey) {
+              toast('Add your ElevenLabs API key in Settings to use voice check-in');
+              return;
+            }
+            // Mark as working (closes the intervention) and open the unified voice UI.
+            onRespond(intervention.id, 'working');
+            useVoiceChatStore.getState().openCheckin();
+          }}
         >
           <HelpCircle className="size-4 mr-1" />
           I'm stuck
@@ -146,17 +135,15 @@ export function InterventionDialog({ intervention, onRespond }: InterventionDial
             </span>
           )}
           <DialogTitle className="text-text-primary">
-            {showCheckin ? 'Voice Check-in' : 'Intervention'}
+            Intervention
           </DialogTitle>
           <SeverityBadge severity={intervention.severity} />
         </div>
-        {!showCheckin && (
-          <DialogDescription className="text-text-secondary mt-2">
-            {stripEmotionTags(intervention.text)}
-          </DialogDescription>
-        )}
+        <DialogDescription className="text-text-secondary mt-2">
+          {stripEmotionTags(intervention.text)}
+        </DialogDescription>
       </DialogHeader>
-      {showCheckin ? checkinContent : (isHighSeverity ? highSeverityFooter : defaultFooter)}
+      {isHighSeverity ? highSeverityFooter : defaultFooter}
     </>
   ) : null;
 

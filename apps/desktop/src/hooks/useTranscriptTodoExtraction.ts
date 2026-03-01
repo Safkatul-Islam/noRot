@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { TodoItem } from '@norot/shared';
 import { getNorotAPI } from '@/lib/norot-api';
-import { useVoiceChatStore } from '@/stores/voice-chat-store';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -16,18 +15,25 @@ const DEBOUNCE_MS = 3_000;
 const COOLDOWN_MS = 15_000;
 const MIN_ASSISTANT_CHAR_LENGTH = 50;
 
+export interface ExtractionCallbacks {
+  getProposedTodos: () => TodoItem[];
+  setProposedTodos: (todos: TodoItem[]) => void;
+  setIsExtracting: (v: boolean) => void;
+  setMissingGeminiKey: (v: boolean) => void;
+}
+
 export function useTranscriptTodoExtraction(
   transcript: ChatMessage[],
   status: string,
+  callbacks: ExtractionCallbacks,
+  opts?: { enabled?: boolean },
 ) {
-  const isExtracting = useVoiceChatStore((s) => s.isExtracting);
-  const missingGeminiKey = useVoiceChatStore((s) => s.missingGeminiKey);
-  const setIsExtracting = useVoiceChatStore((s) => s.setIsExtracting);
-  const setMissingGeminiKey = useVoiceChatStore((s) => s.setMissingGeminiKey);
+  const enabled = opts?.enabled ?? true;
+  const callbacksRef = useRef(callbacks);
+  callbacksRef.current = callbacks;
 
-  const proposedTodos = useVoiceChatStore((s) => s.proposedTodos) as TodoItemWithEdited[];
-  const setProposedTodos = useVoiceChatStore((s) => s.setProposedTodos);
-  const hasProposedTodos = proposedTodos.length > 0;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   const lastExtractedAtRef = useRef(0);
   const lastExtractedLenRef = useRef(0);
@@ -45,16 +51,17 @@ export function useTranscriptTodoExtraction(
     };
   }, []);
 
-  const runExtraction = useCallback(async () => {
+  const runExtraction = useCallback(async (opts?: { ignoreCooldown?: boolean }) => {
+    if (!enabledRef.current) return;
     if (!mountedRef.current) return;
 
     // Check for Gemini key
     const settings = await getNorotAPI().getSettings();
     if (!settings.geminiApiKey) {
-      setMissingGeminiKey(true);
+      callbacksRef.current.setMissingGeminiKey(true);
       return;
     }
-    setMissingGeminiKey(false);
+    callbacksRef.current.setMissingGeminiKey(false);
 
     // Build transcript text for extraction (read from ref for stable callback)
     const currentTranscript = transcriptRef.current;
@@ -66,9 +73,9 @@ export function useTranscriptTodoExtraction(
 
     // Cooldown check — moved here so debounce timer isn't blocked
     const elapsed = Date.now() - lastExtractedAtRef.current;
-    if (elapsed < COOLDOWN_MS) return;
+    if (!opts?.ignoreCooldown && elapsed < COOLDOWN_MS) return;
 
-    setIsExtracting(true);
+    callbacksRef.current.setIsExtracting(true);
     try {
       const extracted = await getNorotAPI().extractTodos(fullText) as TodoItemWithEdited[];
       if (!mountedRef.current) return;
@@ -76,45 +83,83 @@ export function useTranscriptTodoExtraction(
       lastExtractedAtRef.current = Date.now();
       lastExtractedLenRef.current = currentTranscript.length;
 
-      // Merge: never overwrite user-edited todos
-      const currentTodos = useVoiceChatStore.getState().proposedTodos as TodoItemWithEdited[];
-      const editedMap = new Map<string, TodoItemWithEdited>();
-      for (const t of currentTodos) {
-        if (t._userEdited) {
-          editedMap.set(t.text.toLowerCase(), t);
-        }
+      // Merge: accumulate extracted todos.
+      // If a todo was edited by the user, only enrich missing optional fields.
+      const currentTodos = callbacksRef.current.getProposedTodos() as TodoItemWithEdited[];
+      const normalizedKey = (text: string) => text.trim().toLowerCase();
+      const hasText = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+      const hasDuration = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+
+      const merged: TodoItemWithEdited[] = [...currentTodos];
+      const indexByText = new Map<string, number>();
+      for (let i = 0; i < merged.length; i++) {
+        const key = normalizedKey(merged[i]?.text ?? '');
+        if (key && !indexByText.has(key)) indexByText.set(key, i);
       }
 
-      const merged: TodoItemWithEdited[] = [];
-      const seen = new Set<string>();
-
-      // Keep all user-edited todos first
-      for (const t of currentTodos) {
-        if (t._userEdited) {
-          merged.push(t);
-          seen.add(t.text.toLowerCase());
-        }
-      }
-
-      // Add extracted todos, skipping those that match user-edited ones
+      let changed = false;
       for (const t of extracted) {
-        const key = t.text.toLowerCase();
-        if (!seen.has(key)) {
+        const key = normalizedKey(t.text);
+        if (!key) continue;
+
+        const existingIdx = indexByText.get(key);
+        if (typeof existingIdx === 'number') {
+          const existing = merged[existingIdx];
+          if (!existing._userEdited) {
+            merged[existingIdx] = {
+              ...existing,
+              ...t,
+              id: existing.id,
+              done: existing.done,
+              order: existing.order,
+              _userEdited: false,
+            };
+            changed = true;
+            continue;
+          }
+
+          // Edited todos: only fill missing optional fields.
+          const next: TodoItemWithEdited = { ...existing };
+          if (!hasText(next.app) && hasText(t.app)) next.app = t.app;
+          if (!hasText(next.url) && hasText(t.url)) next.url = t.url;
+          if ((!Array.isArray(next.allowedApps) || next.allowedApps.length === 0)
+            && Array.isArray(t.allowedApps)
+            && t.allowedApps.length > 0
+          ) {
+            next.allowedApps = t.allowedApps;
+          }
+          if (!hasText(next.deadline) && hasText(t.deadline)) next.deadline = t.deadline;
+          if (!hasText(next.startTime) && hasText(t.startTime)) next.startTime = t.startTime;
+          if (!hasDuration(next.durationMinutes) && hasDuration(t.durationMinutes)) next.durationMinutes = t.durationMinutes;
+
+          // Ensure these never change in this merge path.
+          next.id = existing.id;
+          next.done = existing.done;
+          next.order = existing.order;
+          next._userEdited = true;
+
+          if (JSON.stringify(next) !== JSON.stringify(existing)) {
+            merged[existingIdx] = next;
+            changed = true;
+          }
+        } else {
           merged.push({ ...t, _userEdited: false });
-          seen.add(key);
+          indexByText.set(key, merged.length - 1);
+          changed = true;
         }
       }
 
-      setProposedTodos(merged);
+      if (changed) callbacksRef.current.setProposedTodos(merged);
     } catch (err) {
       console.warn('[transcript-extraction] Extraction failed:', err);
     } finally {
-      if (mountedRef.current) setIsExtracting(false);
+      if (mountedRef.current) callbacksRef.current.setIsExtracting(false);
     }
-  }, [setProposedTodos]);
+  }, []);
 
   // Debounced extraction on new transcript messages
   useEffect(() => {
+    if (!enabled) return;
     if (status !== 'connected') return;
     if (transcript.length === 0) return;
 
@@ -138,26 +183,57 @@ export function useTranscriptTodoExtraction(
 
   // Final extraction when status transitions to disconnected
   useEffect(() => {
+    if (!enabled) {
+      prevStatusRef.current = status;
+      return;
+    }
     if (prevStatusRef.current !== 'disconnected' && status === 'disconnected') {
       if (transcript.length > 0 && transcript.length > lastExtractedLenRef.current) {
         // Clear any pending debounce and run immediately
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        runExtraction();
+        runExtraction({ ignoreCooldown: true });
       }
     }
     prevStatusRef.current = status;
   }, [status, transcript, runExtraction]);
 
-  const updateProposedTodos = useCallback((todos: TodoItemWithEdited[]) => {
-    // Mark all as user-edited when the user modifies them through the preview list
-    setProposedTodos(todos.map((t) => ({ ...t, _userEdited: true })));
-  }, [setProposedTodos]);
+  const updateProposedTodos = useCallback((todos: TodoItem[]) => {
+    const prev = callbacksRef.current.getProposedTodos() as TodoItemWithEdited[];
+    const prevById = new Map(prev.map((t) => [t.id, t]));
+
+    const changedKeys: (keyof TodoItem)[] = [
+      'text',
+      'done',
+      'order',
+      'app',
+      'url',
+      'deadline',
+      'startTime',
+      'durationMinutes',
+      'allowedApps',
+    ];
+
+    const next = (todos as TodoItemWithEdited[]).map((t) => {
+      const prevTodo = prevById.get(t.id);
+      if (!prevTodo) return { ...t, _userEdited: true };
+      if (prevTodo._userEdited) return { ...t, _userEdited: true };
+
+      const edited = changedKeys.some((k) => {
+        const a = prevTodo[k];
+        const b = t[k];
+        if (Array.isArray(a) || Array.isArray(b)) {
+          return JSON.stringify(a ?? []) !== JSON.stringify(b ?? []);
+        }
+        return a !== b;
+      });
+
+      return { ...t, _userEdited: edited };
+    });
+
+    callbacksRef.current.setProposedTodos(next);
+  }, []);
 
   return {
-    proposedTodos,
     setProposedTodos: updateProposedTodos,
-    isExtracting,
-    hasProposedTodos,
-    missingGeminiKey,
   };
 }
